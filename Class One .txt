@@ -1,0 +1,274 @@
+# Resumen técnico de ciberseguridad
+
+Documento condensado con definiciones, ejemplos y mitigaciones de los temas tratados en la sesión. Ideal como README para GitHub.
+
+---
+
+## Índice
+
+* Stack overflow
+* `strcpy` y desbordamiento de búfer
+* Análisis dinámico
+* Ingeniería inversa
+* Fuzzing
+* Ambiente: red vs servidor
+* Heap overflow
+* Ataques sobre punteros
+* Ataques format string
+* Race condition (TOCTOU)
+* Corrupción de estados internos
+* Defensa de mínimo privilegio
+* Netcat
+* Segmentar tráfico
+* Shellcode
+* Inyección de buffer
+* Stack canaries
+* Código prologue
+* `snprintf` y funciones seguras vs inseguras
+* Metasploit
+
+---
+
+## Stack overflow
+
+**Definición**: consumo excesivo de la pila hasta exceder el límite asignado por el sistema.
+
+**Causas**: recursión sin condición base, variables locales muy grandes.
+
+**Síntomas**: `StackOverflowError` (Java), segmentation fault (C/C++), crash.
+
+**Mitigaciones**: usar heap para datos grandes, controlar recursión, aumentar tamaño de pila solo si es necesario.
+
+**Ejemplo minimal (C)**:
+
+```c
+void recursiva(){ recursiva(); }
+int main(){ recursiva(); }
+```
+
+---
+
+## `strcpy` y desbordamiento de búfer
+
+**Problema**: `strcpy` copia sin verificar el tamaño del destino.
+
+**Consecuencias**: corrupción de memoria, crashes, vectores de explotación.
+
+**Alternativas seguras**:
+
+```c
+strncpy(dest, src, sizeof(dest)-1);
+dest[sizeof(dest)-1] = '\0';
+// o snprintf
+snprintf(dest, sizeof(dest), "%s", src);
+```
+
+---
+
+## Análisis dinámico
+
+**Definición**: observación del comportamiento del binario en ejecución en un entorno controlado.
+
+**Objetivos**: detectar I/O, llamadas al sistema, comunicaciones, efectos secundarios.
+
+**Herramientas**: Process Monitor, strace, ltrace, gdb, Valgrind, Cuckoo, Any.Run.
+
+**Limitación**: detección anti-VM/anti-debug por parte del malware.
+
+---
+
+## Ingeniería inversa
+
+**Definición**: descubrir diseño y funcionamiento de un artefacto sin documentación.
+
+**Técnicas**: desensamblado (Ghidra, IDA), decompilación, depuración (gdb, x64dbg), instrumentación (Frida), emulación.
+
+**Flujo**: aislar → metadatos → `strings`/`file` → desensamblar → depurar → instrumentar → documentar IOCs.
+
+**Ética/Legal**: requerir autorización para evitar ilegalidad.
+
+---
+
+## Fuzzing
+
+**Definición**: generación automática de entradas malformadas para hallar fallos.
+
+**Tipos**: black-box, grey-box (feedback), white-box (simbólico).
+
+**Herramientas**: AFL/AFL++, libFuzzer, honggfuzz, OSS-Fuzz, angr.
+
+**Instrumentación**: usar sanitizers (ASan, UBSan), cobertura (llvm-cov) y deduplicación de crashes.
+
+---
+
+## Ambiente: red vs servidor
+
+**Red**: dispositivos, enlaces, protocolos. Riesgos: sniffing, MITM, routing attacks.
+
+**Servidor**: OS, servicios, cuentas. Riesgos: RCE, escalamiento, configuración insegura.
+
+**Controles**: segmentación, MFA, patching, logging centralizado, EDR/IDS.
+
+---
+
+## Heap overflow
+
+**Definición**: escritura fuera de los límites en memoria dinámica.
+
+**Efectos**: corrupción de metadatos del allocator, UAF, overwrites controlables.
+
+**Defensas**: ASan, heap hardening, bounds checking, validación de entradas.
+
+---
+
+## Ataques sobre punteros
+
+**Descripción**: manipulación de punteros para leer/escribir memoria arbitraria.
+
+**Vectores**: buffer overflow, UAF, double-free, corrupción de heap.
+
+**Objetivos**: overwrite de vtable/GOT/PLT, control de flujo.
+
+**Mitigación**: CFI, ASLR, DEP/NX, revisión de código, sanitizers.
+
+---
+
+## Ataques format string
+
+**Concepto**: uso malicioso de cadenas de formato cuando el atacante controla la cadena.
+
+**Capacidades**: lectura de memoria y escritura mediante `%n`.
+
+**Prevención**: nunca pasar entrada no confiable como formato. Usar `printf("%s", input)`.
+
+---
+
+## Race condition (TOCTOU)
+
+**Definición**: fallo cuando el orden de acceso concurrente a un recurso produce resultados no deterministas.
+
+**Ejemplo clásico**: `access()` seguido de `open()` sin atomicidad.
+
+**Solución**: bloqueos, operaciones atómicas (`O_CREAT | O_EXCL`), estructuras thread-safe.
+
+---
+
+## Corrupción de estados internos
+
+**Definición**: alteración inesperada de invariantes internas del software.
+
+**Causas**: memory corruption, race conditions, deserialización insegura.
+
+**Mitigaciones**: assertions, checksums, validación, separación de control y datos, runtime integrity checks.
+
+---
+
+## Defensa de mínimo privilegio
+
+**Principio**: cada entidad tiene solo los permisos necesarios.
+
+**Aplicación**: cuentas de servicio restringidas, no ejecutar procesos como root, capacidades mínimas en contenedores.
+
+---
+
+## Netcat
+
+**Descripción**: herramienta para leer/escribir en sockets TCP/UDP.
+
+**Usos**: debugging, transferencia de archivos, banner grabbing.
+
+**Riesgo**: puede usarse como backdoor; evitar `-e` en producción.
+
+---
+
+## Segmentar tráfico
+
+**Definición**: aislar y controlar flujos (VLAN, subredes, ACLs, firewalls) para reducir superficie.
+
+**Objetivo**: contener compromisos y aplicar políticas por zona.
+
+---
+
+## Shellcode
+
+**Descripción**: payload en ensamblador diseñado para ejecutarse en memoria objetivo.
+
+**Características**: pequeño, position-independent, evita caracteres nulos cuando es necesario.
+
+---
+
+## Inyección de buffer
+
+**Sinónimo**: buffer overflow. Ver sección `strcpy` y heap/stack overflow.
+
+**Impacto**: corruption de memoria, ejecución arbitraria.
+
+---
+
+## Stack canaries
+
+**Función**: valores colocados en la pila para detectar overwrites antes del `return`.
+
+**Efecto**: si la canary cambia, se aborta la función o proceso.
+
+---
+
+## Código prologue
+
+**Definición**: instrucciones iniciales de una función que preparan el stack frame (guardar registros, ajustar `rsp/ebp`).
+
+**Relevancia**: punto de interés en análisis binario y para identificar límites de función.
+
+---
+
+## `snprintf` y funciones seguras vs inseguras
+
+**`snprintf`**: escribe con límite de tamaño y evita sobrescribir el buffer si se usa correctamente. Retorna la cantidad de bytes que habría escrito.
+
+**Inseguras**: `strcpy`, `sprintf`, `gets`.
+
+**Seguras**: `snprintf`, `fgets`, `strlcpy` (donde exista), uso correcto de `memcpy` con control de longitud.
+
+---
+
+## Metasploit
+
+**Qué es**: framework modular para desarrollo y automatización de exploits y payloads.
+
+**Uso**: pruebas de penetración, PoC, generación de shellcode y payloads encoders.
+
+**Precaución**: usar en entornos autorizados.
+
+---
+
+## Checklist rápido para pruebas y mitigación
+
+* Aislar muestras y entornos de prueba.
+* Instrumentar con sanitizers y cobertura.
+* Integrar fuzzing en CI.
+* Evitar funciones inseguras en código nuevo.
+* Aplicar principio de mínimo privilegio.
+* Segmentar red y limitar accesos.
+* Habilitar logging centralizado y EDR/IDS.
+* Revisar código por patrones peligrosos (`printf(user)`, `strcpy`, UAF).
+
+---
+
+## Referencias rápidas de herramientas
+
+* Desensamblado/decompilación: Ghidra, IDA, Binary Ninja.
+* Depuración: gdb, x64dbg.
+* Instrumentación: Frida, DynamoRIO.
+* Fuzzing: AFL, libFuzzer, honggfuzz.
+* Monitoreo red: Wireshark, Zeek, Suricata.
+* Sandbox: Cuckoo, Any.Run.
+
+---
+
+## Nota legal
+
+Verifique permisos antes de realizar análisis, fuzzing o explotación. Operar sin autorización puede ser delito.
+
+---
+
+*Fin del documento.*
