@@ -1,0 +1,286 @@
+# Criptografía y mitigaciones — Guía técnica para repositorio GitHub
+
+Documento técnico. Contiene explicaciones detalladas y ejemplos prácticos listos para copiar en proyectos. No hay material motivacional ni preguntas.
+
+---
+
+## Índice
+
+1. Resumen
+2. AES-256: mitigaciones y ejemplos
+3. ECC: prácticas y ejemplo de uso
+4. Hashing de contraseñas: Argon2, bcrypt, scrypt (ejemplos)
+5. RSA: longitudes de clave y migración desde RSA-1024
+6. Hashcat: riesgos y mitigaciones operativas
+7. Firewall: configuración y reglas mínimas
+8. Modos de operación inseguros: ejemplos y demostraciones
+9. Recomendaciones generales y checklist
+
+---
+
+## 1. Resumen
+
+Este documento describe mitigaciones prácticas para algoritmos y tecnologías criptográficas: AES-256, ECC, funciones de hashing de contraseñas (Argon2, bcrypt, scrypt), RSA, y contramedidas frente a herramientas de cracking (Hashcat). Incluye ejemplos en línea de comandos y snippets en Python para uso inmediato.
+
+---
+
+## 2. AES-256: mitigaciones y ejemplos
+
+### Riesgos principales
+
+* Fugas por canales laterales (tiempo, caché, EM).
+* Reutilización de IV/nonce cuando se usan modos que lo requieren.
+* Uso de modos no autenticados que permiten manipulación.
+
+### Contramedidas
+
+* Usar modos AEAD: AES-GCM o AES-CCM.
+* Generar nonce/IV único por mensaje. No reutilizar.
+* No truncar la etiqueta (tag) de autenticidad.
+* Usar librerías auditadas (OpenSSL, libsodium, cryptography).
+* Rotar claves y limitar volumen de datos cifrados con una misma clave.
+* Protecciones en memoria para claves (zeroize) y uso de HSM si está disponible.
+
+### Ejemplo: cifrar/descifrar con OpenSSL (GCM)
+
+```bash
+# Generar clave aleatoria de 256 bits
+openssl rand -out key.bin 32
+
+# Cifrar
+openssl enc -aes-256-gcm -in archivo.txt -out archivo.txt.enc -pass file:./key.bin -pbkdf2 -S $(openssl rand -hex 12)
+
+# Descifrar
+openssl enc -d -aes-256-gcm -in archivo.txt.enc -out archivo.txt.dec -pass file:./key.bin -pbkdf2
+```
+
+> Nota: OpenSSL CLI puede abstraer manejo de IV/tag. Ver implementación del wrapper en producción.
+
+### Ejemplo en Python (cryptography)
+
+```python
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import os
+
+key = AESGCM.generate_key(bit_length=256)
+aesgcm = AESGCM(key)
+nonce = os.urandom(12)  # 96 bits recomendado
+plaintext = b"datos secretos"
+associated_data = b"cabecera"
+
+ct = aesgcm.encrypt(nonce, plaintext, associated_data)
+# almacenar nonce e associated_data junto con ct
+
+# descifrar
+pt = aesgcm.decrypt(nonce, ct, associated_data)
+```
+
+---
+
+## 3. ECC: prácticas y ejemplo de uso
+
+### Riesgos principales
+
+* Curvas débiles o mal implementadas.
+* Validación insuficiente de puntos recibidos.
+* Vulnerabilidad a ataques de canal lateral.
+
+### Contramedidas
+
+* Preferir curvas modernas y seguras: Curve25519 (X25519) para ECDH y Ed25519 para firmas.
+* Validar que los puntos provistos pertenezcan a la curva cuando la API lo requiera.
+* Almacenar claves privadas en HSM/TPM cuando sea posible.
+* Usar librerías que aplican contramedidas contra canal lateral.
+
+### Ejemplo: X25519 (Python)
+
+```python
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+# generar clave privada
+priv = X25519PrivateKey.generate()
+pub = priv.public_key()
+
+# exportar
+priv_bytes = priv.private_bytes()
+# realizar ECDH con clave remota
+```
+
+---
+
+## 4. Hashing de contraseñas: Argon2, bcrypt, scrypt
+
+### Principios
+
+* No usar hashes generales (SHA-256, MD5) para contraseñas.
+* Usar sal única por usuario.
+* Usar funciones adaptativas con coste y/o memoria ajustable.
+* Registrar parámetros usados (salt, memory, iterations, parallelism) en el esquema de almacenamiento.
+
+### Argon2 (recomendado: Argon2id)
+
+* Parámetros orientativos (2025): memory=64*1024 (KB) = 64 MB, iterations=3, parallelism=2.
+* Argon2id ofrece equilibrio para ataques GPU y ataques por canal lateral.
+
+#### Ejemplo (Python, argon2-cffi)
+
+```python
+from argon2 import PasswordHasher
+ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, hash_len=32)
+
+# hashear
+hash = ph.hash('contraseña-secreta')
+
+# verificar
+ph.verify(hash, 'contraseña-secreta')
+```
+
+### bcrypt
+
+* Evitar truncamiento: bcrypt limita a 72 bytes en muchas implementaciones.
+* Cost mínimo recomendado en 2025: 12 o superior.
+
+#### Ejemplo (Python, bcrypt)
+
+```python
+import bcrypt
+pw = b"contraseña-larga-aqui"
+salt = bcrypt.gensalt(rounds=12)
+hash = bcrypt.hashpw(pw, salt)
+# verificar
+bcrypt.checkpw(pw, hash)
+```
+
+### scrypt
+
+* Parámetros: N (coste CPU), r (bloque), p (paralelismo). Ejemplo seguro: N=2**15, r=8, p=1.
+
+#### Ejemplo (Python)
+
+```python
+import hashlib, os
+pw = b"contraseña-secreta"
+salt = os.urandom(16)
+key = hashlib.scrypt(pw, salt=salt, n=2**15, r=8, p=1, dklen=64)
+```
+
+### Esquema de almacenamiento recomendado
+
+Guardar: `id_funcion$parámetros$salt$hash`.
+Ejemplo: `argon2id$v=19$m=65536,t=3,p=2$<salt_b64>$<hash_b64>`.
+
+---
+
+## 5. RSA: longitudes de clave y migración desde RSA-1024
+
+### Estado
+
+* RSA-1024 es inseguro para nuevas implementaciones. Factoring práctico en clústeres.
+* Recomendación mínima: RSA-2048. Para mayor seguridad: RSA-3072 o migrar a ECC (Ed25519 / X25519).
+
+### Migración
+
+1. Inventariar certificados y llaves privadas.
+2. Emitir nuevas claves (RSA-2048/3072 o ECC) en HSM si disponible.
+3. Actualizar firmas y certificados en sistemas dependientes.
+4. Rotar claves y revocar certificados antiguos.
+5. Mantener compatibilidad mediante cross-signing por tiempo limitado.
+
+---
+
+## 6. Hashcat: riesgos y mitigaciones operativas
+
+### Riesgo
+
+* Hashcat acelera ataques por GPU usando diccionarios, reglas y ataques híbridos.
+
+### Contramedidas
+
+* Usar funciones de hashing de contraseñas costosas (Argon2, scrypt, bcrypt).
+* Implementar MFA obligatoria.
+* Limitación de intentos por IP/usuario y bloqueo exponencial.
+* Monitoreo y alertas por patrones de autenticación anómalos.
+* Forzar rotación de contraseñas y controlar contraseñas comprometidas mediante listas de bloqueo.
+
+---
+
+## 7. Firewall: configuración y reglas mínimas
+
+### Principios
+
+* Denegar por defecto. Permitir solo lo necesario.
+* Segmentar redes por rol y criticidad.
+* Inspección de estado y control de conexiones.
+* Integrar IPS/IDS y logs a SIEM.
+
+### Ejemplo mínimo de reglas (pseudo-ufw)
+
+```text
+# política por defecto
+ufw default deny incoming
+ufw default allow outgoing
+
+# permitir SSH desde admin-net
+ufw allow from 10.0.0.0/24 to any port 22
+
+# permitir HTTPS
+ufw allow 443/tcp
+
+# permitir servicio interno (base de datos) solo desde app-nets
+ufw allow from 10.1.0.0/16 to any port 5432
+```
+
+---
+
+## 8. Modos de operación inseguros: ejemplos y demostraciones
+
+### ECB
+
+* Muestra patrones. Nunca usar para datos con estructura repetitiva.
+
+### CBC con IV estático
+
+* IV debe ser aleatorio y único por mensaje. IV estático permite ataques de correlación.
+
+### CTR/stream ciphers con nonce repetido
+
+* Reutilizar nonce produce XOR del keystream. Ejemplo ilustrativo:
+
+```python
+# demostración conceptual
+keystream = stream(key, nonce)
+ct1 = xor(pt1, keystream)
+ct2 = xor(pt2, keystream)
+# ct1 xor ct2 = pt1 xor pt2 -> facilita recuperación
+```
+
+### Padding oracle
+
+* Implementación debe devolver errores indistinguibles para evitar oráculos.
+* Mejor usar AEAD donde la verificación de autenticidad ocurre antes de revelar errores de padding.
+
+---
+
+## 9. Recomendaciones generales y checklist
+
+* Usar AES-GCM o ChaCha20-Poly1305 para cifrado simétrico autenticado.
+* Preferir Ed25519/X25519 para firmas y ECDH.
+* Para contraseñas usar Argon2id con parámetros ajustados por memoria y tiempo.
+* Retirar RSA-1024; migrar a RSA-2048+/ECC.
+* No usar MD5 ni SHA-1 para integridad.
+* Proteger claves en HSM/TPM; realizar zeroize en memoria.
+* Registrar esquema de hashing y parámetros en la base de datos.
+* Implementar MFA y limitación de intentos.
+* Auditar bibliotecas criptográficas y actualizar regularmente.
+
+---
+
+### Archivos de ejemplo para repositorio
+
+* `examples/aes_gcm_python.py`
+* `examples/argon2_password_hashing.py`
+* `docs/migration_rsa.md`
+
+---
+
+Fin del documento.
