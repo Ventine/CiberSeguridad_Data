@@ -1,0 +1,235 @@
+TLS, criptografía y vulnerabilidades
+Propósito
+
+Guía operativa y referenciable para repositorios GitHub. Contiene explicación técnica, ejemplos de comprobación y configuraciones mínimas para endurecer TLS y criptografía.
+
+Índice
+
+TLS / SSL
+
+Protocolos obsoletos y ataques históricos
+
+Certificados (self-signed, ECC, debilidades)
+
+Padding oracle
+
+BadUSB
+
+Uso inseguro de servicios
+
+PRNG débiles, vulnerabilidad de seed y ataques de predicción
+
+Claves asimétricas: malas prácticas y mitigaciones
+
+Manejo de bytes y nota sobre “bytesuiute”
+
+FIPS 140-2
+
+Checklist operativo
+
+Comandos y ejemplos prácticos
+
+TLS / SSL
+
+TLS cifra canales cliente-servidor.
+
+SSL está obsoleto.
+
+Objetivo: permitir solo TLS 1.2+ y preferir TLS 1.3.
+
+Comprobación rápida:
+
+openssl s_client -connect ejemplo.com:443 -tls1_2
+openssl s_client -connect ejemplo.com:443 -tls1_3
+openssl s_client -connect ejemplo.com:443 -showcerts
+
+
+Nginx (configuración mínima recomendada):
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305';
+ssl_ecdh_curve X25519:secp384r1:secp256r1;
+ssl_session_tickets off;
+ssl_stapling on;
+
+Protocolos obsoletos y ataques históricos
+
+Deshabilitar: SSLv2, SSLv3, TLS 1.0, TLS 1.1.
+
+POODLE: explota SSLv3 y CBC mal gestionado.
+
+BEAST: afecta TLS 1.0 con CBC.
+
+CRIME / BREACH: explotan compresión en canal cifrado y compresión HTTP sobre respuestas que incluyen secretos.
+
+Heartbleed (CVE-2014-0160): filtración de heap por extensión heartbeat en OpenSSL.
+
+Mitigaciones generales:
+
+Usar AEAD (AES-GCM, ChaCha20-Poly1305).
+
+Forzar PFS (ECDHE).
+
+Desactivar compresión TLS.
+
+Parchear librerías criptográficas.
+
+Certificados: self-signed, ECC, debilidades
+
+Self-signed: adecuados para pruebas y entornos cerrados. No confiar externamente sin distribuir raíz.
+
+ECC: mejor seguridad por bit. Curvas recomendadas: P-256 (prime256v1), P-384, X25519.
+
+Debilidades: RSA < 2048, SHA-1, validez excesiva, claves privadas sin protección.
+
+Generar clave ECC y certificado autofirmado:
+
+openssl ecparam -name prime256v1 -genkey -noout -out ecc.key
+openssl req -new -key ecc.key -out ecc.csr -subj "/CN=ejemplo.com"
+openssl x509 -req -in ecc.csr -signkey ecc.key -days 365 -out ecc.crt
+
+Padding Oracle Attack
+
+Vector: modo CBC con respuesta que revela validez del padding.
+
+Oráculo: cualquier feedback diferencial (mensaje de error, timing, tamaño).
+
+Impacto: recuperación de plaintext sin conocer la clave.
+
+Mitigaciones:
+
+Usar AEAD o Encrypt-then-MAC.
+
+Verificar MAC antes de desencriptar.
+
+Homogeneizar errores y tiempos.
+
+Patrón Encrypt-then-MAC (pseudocódigo):
+
+C = AES_CTR_Encrypt(K_enc, P, IV)
+T = HMAC(K_mac, IV || C)
+send(IV || C || T)
+# En receptor: verificar T antes de desencriptar C
+
+BadUSB
+
+Firmware USB reprogramado para simular HID o almacenamiento malicioso.
+
+Difícil de detectar por antivirus.
+
+Controles:
+
+Whitelisting de dispositivos USB por vendor/product ID.
+
+Bloquear HID en endpoints sensibles.
+
+Políticas MDM/EDR y controles físicos.
+
+Firmado y verificación de firmware por fabricantes.
+
+Uso inseguro de servicios
+
+Exponer APIs sin autenticación o con privilegios excesivos facilita escalamiento lateral y exfiltración.
+
+Controles obligatorios: autenticación mutua (mTLS), OAuth2 con scopes, rate limiting, segmentación de red, logging y alertas por comportamiento anómalo.
+
+PRNG débiles, vulnerabilidad de seed y ataques de predicción
+
+No usar generadores no criptográficos (rand(), Math.random(), java.util.Random) para claves, tokens o nonces.
+
+Si la semilla es predecible (timestamp, PID), un atacante puede reconstruir y predecir salidas.
+
+Reemplazo seguro:
+
+Unix: /dev/urandom o getrandom().
+
+Python: secrets.token_hex().
+
+Java: SecureRandom.getInstanceStrong().
+
+Ejemplos:
+
+# Inseguro
+import random
+token = ''.join(random.choice('0123456789abcdef') for _ in range(32))
+
+# Seguro
+import secrets
+token = secrets.token_hex(32)
+
+Claves asimétricas: malas prácticas y mitigaciones
+
+Evitar claves débiles. Recomendación: RSA ≥ 2048 o ECC P-256/P-384/x25519.
+
+No reutilizar claves entre sistemas.
+
+Almacenar claves privadas en HSM/TPM/KMS.
+
+Rotación automática y corta cuando la política lo permita.
+
+Evitar reutilizar nonces en esquemas que lo prohíben (p. ej. ECDSA, AES-GCM).
+
+Manejo de bytes y nota sobre “bytesuiute”
+
+Si el término fue errata, interpretar como manejo de datos binarios.
+
+Validar límites. Evitar strcpy, gets y usos sin comprobación en C.
+
+Normalizar encodings y validar antes de parsear.
+
+Usar APIs seguras y comprobaciones explícitas de longitud.
+
+FIPS 140-2
+
+Estándar NIST para módulos criptográficos. Cuatro niveles de seguridad.
+
+Usar módulos validados cuando la normativa lo exige.
+
+Verificar CMVP y cumplir Annex A para algoritmos.
+
+Checklist operativo (acción inmediata)
+
+Deshabilitar SSLv2/SSLv3/TLS1.0/TLS1.1.
+
+Permitir TLS1.2/TLS1.3 con suites AEAD y ECDHE.
+
+Eliminar RC4, 3DES, MD5, SHA-1.
+
+Desactivar compresión TLS. Revisar compresión HTTP para respuestas con secretos.
+
+Usar CSPRNG y revisar semillas.
+
+Proteger claves privadas con HSM/KMS.
+
+Habilitar OCSP stapling y Certificate Transparency.
+
+Rotación de certificados tras incidente.
+
+Escaneo de repositorios por secrets y uso de PRNG inseguros.
+
+Forzar PFS y deshabilitar renegociación insegura.
+
+Comandos y ejemplos prácticos
+# Ver ciphers soportados por openssl
+openssl ciphers -v 'ALL:eNULL' | sed -n '1,50p'
+
+# Test TLS handshake
+openssl s_client -connect ejemplo.com:443 -servername ejemplo.com
+
+# Generar RSA 2048
+openssl genrsa -out rsa2048.key 2048
+
+# Generar ECC (P-256) y CSR
+openssl ecparam -name prime256v1 -genkey -noout -out ecc.key
+openssl req -new -key ecc.key -out ecc.csr -subj "/CN=ejemplo.com"
+
+Notas operativas finales
+
+Automatizar parches de librerías criptográficas.
+
+Implementar rotación y revocación rápida de certificados.
+
+Priorizar TLS 1.3 y AEAD.
+
+Auditar despliegues y escanear repositorios en CI/CD por usos inseguros de PRNG y exposición de claves.
