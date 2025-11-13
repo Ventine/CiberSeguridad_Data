@@ -1,0 +1,114 @@
+# Recomendaciones criptográficas generales
+
+## 1. Principio de Kerckhoffs
+
+* Define que la **seguridad de un sistema criptográfico debe depender únicamente de la confidencialidad de la clave**, no del secreto del algoritmo.
+* Implicación práctica: usar algoritmos públicos, revisados y estandarizados (AES, RSA, ECC, SHA-2, HKDF, etc.).
+* Evitar criptografía propietaria o “obfuscación algorítmica”.
+* Beneficio: permite auditoría, compatibilidad y migración segura.
+
+---
+
+## 2. OWASP — buenas prácticas de criptografía aplicada
+
+**Referencias:** OWASP Cryptographic Storage Cheat Sheet / Password Storage Cheat Sheet.
+
+Principios fundamentales:
+
+* Usar **algoritmos aprobados por NIST o equivalentes** (AES-GCM, AES-CTR, ChaCha20-Poly1305).
+* Evitar ECB, MD5, SHA-1, RC4, DES, Triple-DES.
+* Aplicar **cifrado autenticado**: siempre integridad + confidencialidad (GCM, CCM, AEAD).
+* Separar claves por propósito (una clave para cifrar, otra para firmar).
+* Mantener **rotación planificada** y versionado de claves (Key ID + metadata).
+* Validar entropía en generadores aleatorios; usar RNG criptográficamente seguro (e.g., `/dev/urandom`, `getrandom()`, `libsodium.randombytes_buf`).
+
+---
+
+## 3. SAST (Static Application Security Testing)
+
+* Escaneo automático del código fuente para detectar fallos criptográficos o inseguridades relacionadas.
+* Detecta:
+
+  * Claves codificadas en el código (hardcoded).
+  * Algoritmos inseguros (MD5, DES, RC4).
+  * Uso incorrecto de IV o salt fijo.
+  * Comparaciones no constantes en autenticación o HMAC.
+* Herramientas: SonarQube, Checkmarx, Semgrep, CodeQL.
+* Recomendación: ejecutar SAST en cada pipeline de CI/CD; integrar reglas personalizadas para patrones criptográficos corporativos.
+
+---
+
+## 4. Salt único (unicidad y finalidad)
+
+* El **salt** previene ataques de diccionario y rainbow tables.
+* Debe ser **único y aleatorio por derivación** (no secreto).
+* Longitud mínima: 128 bits.
+* Uso:
+
+  * Derivación de claves desde contraseñas (PBKDF2, Argon2id, scrypt).
+  * Hashing de contraseñas.
+* No reutilizar salt entre usuarios ni entre operaciones.
+* Almacenar el salt junto al hash o la clave derivada.
+
+Ejemplo defensivo (Argon2id):
+
+```
+derived_key = Argon2id(password, salt=random(16), time_cost=3, memory_cost=65536, parallelism=4, length=32)
+```
+
+---
+
+## 5. Garantizar intensidad criptográfica (coste computacional)
+
+* Intensidad = nivel de resistencia contra ataques de fuerza bruta.
+* Se logra ajustando **parámetros de KDF**:
+
+  * PBKDF2: iteraciones > 200 000.
+  * bcrypt: cost factor ≥ 12.
+  * Argon2id: usar valores altos de memoria y tiempo según hardware.
+* Medir el tiempo de derivación y asegurar un retardo mínimo (~100 ms por operación para contraseñas interactivas).
+* Mantener benchmark anual y ajustar parámetros según el avance de CPU/GPU.
+
+---
+
+## 6. Uso correcto de **libsodium**
+
+* Librería moderna, portable y resistente a side-channels.
+* Reemplaza el uso directo de OpenSSL o implementaciones inseguras.
+* Funcionalidades seguras por defecto:
+
+  * `crypto_secretbox_*`: cifrado autenticado (ChaCha20-Poly1305).
+  * `crypto_aead_*`: AEAD GCM/ChaCha20.
+  * `crypto_pwhash_*`: derivación de contraseñas con Argon2id.
+  * `randombytes_buf()`: RNG seguro.
+* Propiedades:
+
+  * Operaciones constant-time.
+  * Parámetros seguros por defecto.
+  * Compatible con HKDF y KDF contextuales (`crypto_kdf_derive_from_key`).
+* Recomendación: usar `crypto_pwhash_argon2id` con parámetros definidos por `crypto_pwhash_OPSLIMIT_INTERACTIVE` o `OPSLIMIT_MODERATE` según el contexto.
+
+Ejemplo defensivo:
+
+```c
+crypto_pwhash(
+    out_key, 32,
+    password, strlen(password),
+    salt,
+    crypto_pwhash_OPSLIMIT_MODERATE,
+    crypto_pwhash_MEMLIMIT_MODERATE,
+    crypto_pwhash_ALG_ARGON2ID13
+);
+```
+
+---
+
+## 7. Síntesis de buenas prácticas
+
+1. Basar toda seguridad en claves, no en secreto del código (Kerckhoffs).
+2. Usar algoritmos modernos y AEAD; no reinventar primitivas.
+3. Validar configuración criptográfica mediante SAST y revisiones manuales.
+4. Generar y almacenar un salt único y aleatorio por derivación.
+5. Ajustar parámetros de KDF para mantener coste temporal >100 ms.
+6. Usar `libsodium` o bibliotecas con defensas contra side-channels y defaults seguros.
+7. Auditar periódicamente la configuración criptográfica con OWASP y NIST SP 800-63B como referencia.
