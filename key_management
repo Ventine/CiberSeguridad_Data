@@ -1,0 +1,118 @@
+# Resumen técnico corto
+
+Lista de riesgos, vectores y mitigaciones concretas para gestión de claves, HSM/KMS, derivación y ataques por canal lateral (timing, energía, cache). Enfocado en prácticas defensivas y diseño seguro; **no** contiene instrucciones operativas para explotar vulnerabilidades.
+
+# 1. Riesgos en gestión de claves (inseguras)
+
+* Claves en texto plano en repositorios o backups.
+* Claves derivadas con parámetros débiles (salt ausente, iteraciones bajas).
+* Reutilización de claves entre dominios (cifrado, firma, MAC).
+* Rotación inexistente o mal planificada.
+* Escritorio/servidor con acceso físico no controlado.
+* Gestión de privilegios excesivos para administradores de claves.
+
+# 2. HSMs vs KMS — roles y limitaciones
+
+* HSM (Hardware Security Module): dispositivo FIPS/CC que protege claves en hardware, ejecuta operaciones criptográficas dentro del perímetro seguro, evita exportación de claves maestras. Uso: custodia de claves raíz, offload de operaciones sensibles, mitigación de extracción por software.
+  Limitaciones: configuración errónea, firmware vulnerable, gestión de procedimientos de backup/escrow.
+* KMS (Key Management Service — cloud/on-prem): orquesta lifecycle (creación, rotación, acceso) y puede delegar operaciones a HSM. Uso: integración con aplicaciones a escala.
+  Limitaciones: modelo de confianza del proveedor, metadatos accesibles, riesgos de IAM mal configurado.
+
+# 3. Clave maestra y derivación de claves (seguridad práctica)
+
+* Separación de funciones: *master key* sólo en HSM; aplicaciones usan claves derivadas para sesiones/objetos.
+* KDF recomendados (defensivos): HKDF para derivación en protocolos, Argon2/PBKDF2/scrypt para contraseñas con parámetros ajustados.
+* Parámetros mínimos sugeridos:
+
+  * HKDF: usar HMAC-SHA256/512; incluir contexto (info) y salt único por derivación.
+  * PBKDF2: iteraciones >= 200k (dependiendo hardware) o preferir Argon2id con memory cost y time cost adecuados.
+* No usar KDF caseros. Añadir versionado en inputs (info/version) para permitir migraciones.
+* Key wrapping: envolver claves de datos con KEK (Key-Encrypting Key) almacenada en HSM; usar AES-KW / RFC 3394 o AES-GCM for authenticated wrapping.
+
+Ejemplo conceptual (HKDF):
+
+* Inputs: master_key (secreto en HSM), salt único, info=“svc:db:rowid”, L=32.
+* salida = HKDF-Extract(salt, master_key) → HKDF-Expand(prk, info, L).
+
+# 4. Políticas de acceso y operaciones
+
+* Principio de menor privilegio: roles separados para emisión/rotación/uso.
+* Autenticación fuerte para administradores (MFA físico + políticas basadas en hardware).
+* Auditoría inmutable de llamadas criptográficas y procedimientos de escape (escrow) con quorum/firmas múltiples.
+* Rotación periódica y revocación rápida con compatibilidad hacia atrás controlada (key-versioning).
+
+# 5. Side-channel attacks — clasificación y principios defensivos
+
+**Nota:** siguientes descripciones son conceptuales y orientadas a mitigación.
+
+## 5.1 Timing attacks (temporal)
+
+* Principio: medición del tiempo de operaciones revela información dependiente de claves (ej.: comparaciones no constantes, exponentiación modular con tabla de ventanas).
+* Mitigaciones:
+
+  * Implementar operaciones en *tiempo constante* (constant-time) para comparaciones, memcopy condicionadas, modular exponentiation sin ramificaciones por bits secretas.
+  * Usar blinding (e.g., RSA blinding) dentro del HSM para operaciones con entradas públicas.
+  * Evitar diferencias observables en protocolos (rellenar/normalizar respuestas).
+* Ejemplo defensivo (constant-time compare, pseudocódigo):
+
+  ```pseudo
+  function constant_time_eq(a, b):
+      if len(a) != len(b): return false
+      result = 0
+      for i in 0..len(a)-1:
+          result |= a[i] XOR b[i]
+      return result == 0
+  ```
+
+## 5.2 Power/EM (ataques por consumo de energía / electromagnético)
+
+* Principio: trazas de corriente/EM durante operaciones revelan patrones (por ejemplo S-box, operaciones aritméticas).
+* Mitigaciones:
+
+  * Ejecutar operaciones críticas dentro de HSM certificadas; HSMs usan: balanceo de corriente, ruido activo, detección de manipulación, y medidas de encubrimiento.
+  * Implementar masking de variables intermedias (introducir aleatoriedad para derivadas intermedias); usar múltiples máscaras y re-mascarado.
+  * Detección de condiciones anormales (canales de medición, probes físicos) y bloqueo seguro.
+
+## 5.3 Cache (microarquitectura)
+
+* Principio: observación de patrones de acceso a cache (evicciones, tiempos) por co-locación revela bits secretos (ej.: AES T-table, RSA square-and-multiply).
+* Mitigaciones:
+
+  * Evitar implementaciones dependientes de tablas indexadas por datos secretos (usar bitslicing, implementaciones S-box que no indexen memoria con secreto).
+  * Usar instrucciones y librerías constant-time probadas; preferir implementaciones resistentes a cache side-channels.
+  * Ejecutar operaciones secretas en enclaves o hardware que partitione cache o use cache flushes determinísticos cuando sea apropiado.
+
+# 6. Contramedidas en diseño y despliegue
+
+* Confidencialidad en repositorios: nunca commitear claves; usar secrets manager + CI integraciones que inyecten secretos en runtime.
+* HSM placement: mantener HSMs en un dominio de red separado, control de acceso físico y lógico, backups de clave (split-knowledge, threshold-schemes).
+* KMS integraciones: limitar API scopes; logs de acceso a claves con retención y análisis EDR.
+* Testing: pentesting y red team centrado en extracción de claves y side-channels; fuzzing de interfaces KMS/HSM.
+* Hardening de bibliotecas: preferir bibliotecas criptográficas mantenidas y con pruebas de side-channel (e.g., libsodium, BoringSSL con builds resistentes).
+* Telemetría: medir latencias, anomalías de tiempo y patrones para detectar intentos de side-channel remoto.
+
+# 7. Procedimientos operativos críticos
+
+* Procedimiento de recuperación: claves maestras en escrow mediante esquema de control de múltiples actores (M-of-N); cada operación requiere quorum físico y autorización.
+* Rotación: versionado de claves, claves derivadas con lifetime corto (ephemeral keys para sesiones), proceso automatizado y probado de rollover.
+* Respuesta a compromisos: plan de rotación urgente, re-encrypt data pipeline, revocación de certificados y claves afectadas, y análisis forense hardware/software.
+
+# 8. Checklist rápido (implementable)
+
+1. Master key sólo en HSM, sin exportación.
+2. Uso de KDFs estándares (HKDF/Argon2) con parámetros documentados.
+3. Key wrapping con authenticated encryption; almacenamiento del KEK en HSM.
+4. Implementaciones constant-time y evitar tablas indexadas por secreto.
+5. Protecciones HSM: blinding, masking, ruido, detección física.
+6. IAM granular para KMS; logs inmutables y alertas en accesos inusuales.
+7. Backup de claves con split-knowledge y quorum.
+8. Tests periódicos: fuzzing, red-team, y revisión de parámetros criptográficos.
+
+# 9. Referencias conceptuales a validar en tu entorno
+
+* Verificar que el HSM cumpla certificaciones relevantes (FIPS 140-2/3, Common Criteria) y que el firmware esté actualizado.
+* Revisar bibliotecas criptográficas usadas y confirmar que declaran resistencia a side-channels o usar builds hardening.
+
+# Información omitida intencionalmente
+
+* No se incluyen pasos detallados para explotar side-channels, ni técnicas prácticas para extracción de claves. Proporciono solo mitigaciones y controles defensivos.
