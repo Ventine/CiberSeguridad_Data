@@ -1,0 +1,160 @@
+Título: Ataques a la lógica de negocio y vectores asociados en aplicaciones modernas
+
+---
+
+## Introducción
+
+Los sistemas actuales fallan menos por vulnerabilidades técnicas clásicas y más por fallos en su diseño operativo. La lógica de negocio —el conjunto de reglas que define cómo debe funcionar un sistema— se convierte en un objetivo porque suele ser difícil de monitorear, difícil de detectar y altamente rentable para un atacante.
+
+---
+
+## Ataques a la lógica de negocio
+
+Un ataque de lógica de negocio altera el flujo previsto de una aplicación sin explotar fallos como inyecciones o desbordamientos. El impacto surge porque la aplicación permite estados que no deberían existir.
+
+### Ejemplo
+
+Un flujo de reembolsos que permite solicitar devolución antes de que la orden cambie a estado “entregado”. Si el backend no valida correctamente la secuencia, el usuario puede generar ciclos de reembolso infinitos.
+
+---
+
+## Abuso de funcionalidad
+
+El sistema ofrece una función legítima usada para un fin ilegítimo. No hay manipulación técnica profunda; la ventaja proviene del propio diseño.
+
+### Ejemplo
+
+Un programa de referidos permite ganar créditos por invitar a nuevos usuarios. Si no hay validación de unicidad o identidad, un atacante puede autogenerarse múltiples cuentas para multiplicar el beneficio.
+
+---
+
+## Buffer Overflow
+
+Clásico error de memoria: se escribe más allá del espacio asignado a un búfer. Esto sobrescribe memoria contigua y puede producir corrupción de estado o ejecución arbitraria.
+
+### Ejemplo
+
+Una función C que copia datos sin verificar el tamaño del origen:
+
+```
+char buf[100];
+strcpy(buf, input);   // input > 100 bytes → overflow
+```
+
+---
+
+## Bug de diseño
+
+Corrección terminológica: “Bus de diseño” es incorrecto; el término adecuado es “Bug de diseño”. Es un error conceptual en la arquitectura, independiente de la implementación.
+
+### Ejemplo
+
+Un sistema de control de acceso que decide permisos basándose únicamente en el nombre del archivo solicitado y no en un ACL real. Un atacante puede renombrar archivos para acceder a contenido restringido.
+
+---
+
+## Vectores de ataque
+
+Rutas utilizadas para activar un fallo. La mayoría de ataques a la lógica de negocio se ejecutan por canales totalmente legítimos.
+
+### Ejemplos
+
+* Parámetros GET o POST
+* Cuerpo JSON enviado desde el cliente
+* Secuencias multi-request dentro de un workflow
+* APIs internas expuestas a través de proxys
+* Colas de mensajería sin validación de estados
+
+---
+
+## Impacto
+
+El impacto está vinculado al estado ilegítimo generado. El daño suele ser económico o de integridad del sistema.
+
+### Ejemplos de impacto
+
+* Compras a precio reducido, saltándose reglas de cálculo
+* Reutilización de beneficios únicos
+* Procesamiento de pedidos sin cobro
+* Bypass de límites de inventario
+
+---
+
+## Dificultad de detección
+
+Estos ataques no generan patrones que un WAF pueda identificar. Parecen actividades legitimas: solicitudes correctamente formadas, métodos correctos, rutas válidas.
+
+### Razón estructural
+
+La lógica corrupta se materializa dentro del backend, no en la capa de transporte. Los logs no registran “intención”, solo acciones válidas.
+
+---
+
+## WAF y sus límites
+
+Un WAF inspecciona tráfico HTTP buscando firmas, anomalías o expresiones maliciosas. No comprende la semántica del negocio.
+
+### Limitaciones
+
+* No detecta que un cupón se está usando fuera de sus reglas.
+* No detecta manipulación de estados internos.
+* No distingue si `price=1` es legítimo o manipulado.
+
+---
+
+## Manipulación de parámetros de precio y corrección de “TSX”
+
+“TSX” no corresponde a un término estándar del ámbito de pricing. Si la intención era referirse a “Tax” o a un “SKU”, se reemplaza conceptualmente. El riesgo proviene de permitir que el cliente envíe valores críticos.
+
+### Ejemplo
+
+Interceptar la request:
+
+```
+POST /checkout
+{
+  "item_id": 332,
+  "price": 100,
+  "qty": 1
+}
+```
+
+El atacante altera `price` a 1 antes de enviarlo.
+
+---
+
+## Validación del precio
+
+El precio debe provenir exclusivamente de una fuente interna no manipulable. La request del cliente solo indica qué producto desea, no el valor de venta.
+
+### Ejemplo
+
+El backend ignora el campo `price` recibido y recalcula usando su tabla interna. Si hay discrepancia, rechaza la operación.
+
+---
+
+## Manipulación de cupones
+
+Alteración del comportamiento previsto de los códigos de descuento.
+
+### Ejemplos
+
+* Reutilizar cupones de un solo uso modificando su `coupon_id` con cada compra.
+* Enviar un cupón expirado antes de que el backend valide la fecha.
+* Multiplicar el descuento aplicando varias rutas del checkout.
+
+---
+
+## Doble gasto
+
+Corrección terminológica: “doble susto” es incorrecto; el término correcto es “doble gasto”. Es un fallo de concurrencia donde un recurso de un solo uso se consume más de una vez antes de actualizar su estado.
+
+### Ejemplo
+
+Dos solicitudes simultáneas realizan checkout con el mismo cupón. El backend procesa ambas antes de marcarlo como usado.
+
+---
+
+## Conclusión
+
+Los ataques de lógica de negocio se producen porque la aplicación confía en información o secuencias que deberían verificarse estrictamente en el backend. Su detección es compleja y su impacto suele ser significativo. La defensa exige modelar estados, validar transiciones y eliminar cualquier dependencia de parámetros enviados por el cliente.
