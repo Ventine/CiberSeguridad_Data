@@ -1,0 +1,203 @@
+Ataques a la lógica de APIs: un mapa completo y operativo
+
+Introducción.
+Las APIs amplían superficie de ataque porque exponen procesos internos como interfaces directas. Cuando la lógica no está blindada, los flujos pueden alterarse para obtener operaciones no autorizadas aun sin vulnerabilidades técnicas clásicas. El objetivo es desglosar cada categoría, su mecanismo, un ejemplo concreto y cómo se encadenan dentro de un escenario API-first.
+
+1. Lógica de negocio en APIs
+   Definición.
+   Manipulación del flujo previsto de una API aprovechando decisiones deficientes en la lógica del backend.
+
+Ejemplo.
+`POST /v1/refund` acepta cualquier `order_id` y no verifica propiedad del pedido. El atacante repite solicitudes con IDs consecutivos y genera reembolsos masivos.
+
+2. BOLA / IDOR (Broken Object Level Authorization)
+   Definición.
+   Acceso directo a objetos que pertenecen a otros usuarios porque la API no verifica autorización a nivel de objeto.
+
+Ejemplo.
+`GET /v1/users/145/profile` devuelve información completa incluso si el usuario autenticado es 233. Manipulación simple del parámetro abre acceso transversal.
+
+3. BFLA (Broken Function Level Authorization)
+   Definición.
+   Llamadas a funciones que el rol actual no debería ejecutar.
+
+Ejemplo.
+Un usuario estándar descubre que existe:
+`POST /v1/admin/disable-account`
+La API no valida el rol y la operación se ejecuta correctamente.
+
+4. Mass Assignment
+   Definición.
+   El backend vincula automáticamente todos los campos del JSON recibido al modelo interno sin filtrar claves sensibles.
+
+Ejemplo.
+Request legítima:
+`PATCH /v1/user`
+`{"name":"Ventine"}`
+Request maliciosa:
+`{"role":"admin","name":"Ventine"}`
+Si el modelo asigna campos sin whitelist, el usuario se eleva.
+
+5. Validación client-side
+   Definición.
+   Restricciones implementadas solo en el frontend generan una barrera inexistente en la API.
+
+Ejemplo.
+El HTML limita un campo “descuento máximo” a 20%. Un atacante envía vía API:
+`{"discount": 100}`
+La API lo acepta porque no valida server-side.
+
+6. Campos ocultos
+   Definición.
+   Parámetros “ocultos” en formularios web que se asumen seguros.
+
+Ejemplo.
+`<input type="hidden" name="price" value="199">`
+Interceptado vía API o proxy, se modifica a `1`. Sin validación en backend, el cobro se distorsiona.
+
+7. Cookies de sesión inseguras
+   Definición.
+   Cookies sin `HttpOnly`, `Secure`, `SameSite` o sin cifrado robusto.
+
+Ejemplo.
+Una SPA usa `session_id=12345` sin protección. Cualquier script inyectado puede extraerla y tomar posesión de la cuenta.
+
+8. Manipulación de datos en tránsito
+   Definición.
+   Alteración de parámetros, cuerpos JSON o cabeceras para forzar estados inconsistentes.
+
+Ejemplo.
+`PATCH /v1/cart`
+`{"product":"A","qty":999999}`
+La API no valida límites y provoca desbordes lógicos en inventario.
+
+9. Ataque de sincronización
+   Definición.
+   Explotación de condiciones de carrera (race conditions) donde dos solicitudes concurrentes generan inconsistencias.
+
+Ejemplo.
+Cupón de un solo uso:
+Dos requests simultáneos:
+`POST /apply-coupon`
+Ambos se procesan antes de marcar uso, generando doble beneficio.
+
+10. OWASP API Top 10
+    Articula las categorías anteriores bajo diez riesgos estructurados:
+    – API1: BOLA
+    – API2: Broken Authentication
+    – API3: BFLA
+    – API4: Rate Limiting ausente
+    – API5: Data Exposure
+    – API6: Mass Assignment
+    – API7: Security Misconfiguration
+    – API8: Injection
+    – API9: Improper Asset Management
+    – API10: Server-Side Request Forgery
+
+11. BULA (si el término original era “BOLA”, corregido arriba).
+    Si la intención era otro acrónimo, no pertenece al léxico estándar de seguridad de APIs.
+
+12. GraphQL
+    Superficie.
+    Los esquemas sobreexpuestos permiten enumeración masiva o acceso a campos no previstos.
+
+Ejemplo.
+Query maliciosa:
+
+```
+{
+  users {
+    id
+    email
+    address
+    orders { id total }
+  }
+}
+```
+
+Si el servidor no implementa `depth limiting`, `field limiting` y `authorization per field`, la extracción es completa.
+
+13. REST
+    Superficie.
+    Rutas predictibles, objetos accesibles por ID secuencial, endpoints sin control de rol.
+
+Ejemplo.
+`GET /orders/1`
+`GET /orders/2`
+Acceso transversal simple cuando no hay filtros.
+
+14. POSTMAN
+    Funciona como facilitador de explotación al permitir repetir solicitudes, modificar parámetros, automatizar flujos y testear límites de autorización.
+
+Ejemplo.
+Importar colección de endpoints y variarlos sistemáticamente:
+Probar `PUT`, `PATCH`, `DELETE` en rutas descubiertas.
+
+15. Manipulación client-side mediante Burp Suite
+    Interceptación de solicitudes, alteración de parámetros, repetición concurrente, fuzzing y descubrimiento de rutas internas.
+
+Ejemplo.
+Modificar:
+`price=149` → `price=0.01`
+Enviar y verificar si el backend aplica precio interno o usa el enviado.
+
+16. Flujo seguro e inseguro
+    Flujo seguro.
+    Cada paso del proceso se autentica, autoriza, valida y se cruza con el estado real del servidor.
+
+Flujo inseguro.
+El backend confía en datos del cliente, permite saltos de pasos, no verifica propiedad de recursos ni roles.
+
+Ejemplo de flujo inseguro.
+Checkout con pasos:
+
+1. Selección
+
+2. Dirección
+
+3. Pago
+   El atacante envía directamente:
+   `POST /v1/checkout/confirm`
+   Sin completar pasos previos. Si la API lo permite, la lógica queda expuesta.
+
+4. Mitigación del flujo
+   – Validación estricta server-side
+   – Autorización a nivel de objeto
+   – Controles de secuencia (cada paso requiere contexto previo)
+   – Tokens de estado inmutables
+   – Rate limiting y bloqueo de concurrencia
+   – Matrices de rol-función
+
+5. Manipulación de envíos
+   Alteración de datos logísticos, direcciones o estados del pedido mediante endpoints mal protegidos.
+
+Ejemplo.
+`PATCH /v1/shipment/123`
+`{"status":"delivered"}`
+Si el backend no valida rol, el atacante “entrega” su propio pedido y fuerza un reembolso.
+
+19. Omisión de restricción y flujo de estado
+    Definición.
+    Salto de pasos o modificación del estado interno sin cumplir condiciones previas.
+
+Ejemplo.
+Una API que permite:
+`POST /v1/user/verify-email`
+sin haber enviado código de verificación.
+
+20. Reparación de integridad insegura
+    Definición.
+    El backend intenta “arreglar” inconsistencias y termina reforzando la vulnerabilidad.
+
+Ejemplo.
+Cuando se envía un precio modificado, el backend “ajusta” el valor dependiendo del enviado, en vez de revalidarlo desde su base interna.
+
+21. Explotación de límites y pausa
+    Definición.
+    Aprovechar límites de tiempo, ventanas de actualización o mecanismos de rate limit mal configurados.
+
+Ejemplo.
+Un atacante envía 500 solicitudes durante el segundo exacto antes de que se aplique un límite horario. Si el backend calcula el límite con un timestamp deficiente, todas pasan.
+
+Cierre.
+Estructura completa para un blog técnico: cada vulnerabilidad se articula sobre la idea base de que la API expone la lógica. Si el backend no asume cero confianza en el cliente, la superficie se abre mediante manipulación de parámetros, flujos, roles, identidades y estados.
