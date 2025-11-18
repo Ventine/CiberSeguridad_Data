@@ -1,0 +1,139 @@
+Análisis de lógica de negocio con enfoque profesional: herramientas, técnicas y metodologías
+
+Introducción.
+Las fallas de lógica de negocio no dependen de vulnerabilidades técnicas tradicionales. Surgen cuando decisiones internas, flujos y restricciones están mal diseñados. Este documento organiza las herramientas y métodos esenciales para detectar, analizar y validar este tipo de fallas con precisión.
+
+1. Developer Tools
+   Función.
+   Proveen visibilidad en tiempo real sobre lo que el frontend envía, recibe y ejecuta.
+
+Componentes útiles.
+– Network: inspección de solicitudes, parámetros, cuerpos JSON y respuestas.
+– Application: cookies, localStorage, sessionStorage.
+– Sources: lógica del frontend, variables, funciones expuestas.
+– Console: errores y eventos útiles para entender condiciones.
+
+Ejemplo.
+En un checkout, el frontend envía `price=199`. Modificando en Developer Tools la request antes del envío a `price=1`, se valida si el backend reescribe el valor o si lo acepta tal cual.
+
+2. Análisis y testeo de lógica de negocio
+   Función.
+   Revela fallos en flujos, secuencias, decisiones internas y validaciones ausentes.
+
+Áreas analizadas.
+– Secuencia obligatoria de pasos.
+– Validación de propiedad de recursos.
+– Restricciones de rol.
+– Controles de integridad.
+
+Ejemplo.
+Un sistema exige verificar identidad antes de cambiar correo. Sin embargo, se descubre que la API permite modificar:
+`PATCH /user/profile {"email":"victima@x.com"}`
+sin verificación extra. La vulnerabilidad no es técnica; es estructural.
+
+3. Prueba de caja blanca
+   Función.
+   Acceso a código, diagramas, rutas internas y reglas ocultas.
+
+Aplicación.
+– Validación de funciones privadas expuestas accidentalmente.
+– Revisión de condicionales: ramas que deberían restringir acceso pero no lo hacen.
+– Identificación de campos internos que nunca se revalidan.
+
+Ejemplo.
+Revisando el código, se detecta que `role` se asigna directamente desde el JSON sin filtrado. Esto permite un Mass Assignment que en caja negra sería difícil de descubrir.
+
+4. Prueba de caja negra
+   Función.
+   El analista opera sin información interna para observar cómo se comporta el sistema desde la perspectiva externa.
+
+Aplicación.
+– Descubrimiento de endpoints por patrones.
+– Pruebas de límites y secuencias omitidas.
+– Validación de roles mediante modificaciones controladas.
+
+Ejemplo.
+Descubrir que `GET /orders/2` está accesible cambiando simplemente el ID, revelando un BOLA/IDOR.
+
+5. Matriz de uso
+   Función.
+   Mapa detallado de qué actor puede ejecutar qué acción bajo qué condiciones.
+
+Componentes.
+– Actores: anónimo, usuario, admin, proveedor.
+– Acciones: crear, leer, modificar, eliminar.
+– Condiciones: autenticado, dueño del recurso, límite de tiempo.
+– Restricciones: campos permitidos, funciones restringidas.
+
+Ejemplo.
+Si la matriz dice que un usuario básico solo puede ver su propio pedido, pero la API permite:
+`GET /orders/any_id`
+la inconsistencia aparece de inmediato.
+
+6. Modelado de amenaza
+   Función.
+   Identifica qué puede salir mal antes de que ocurra.
+
+Elementos.
+– Activos: pedidos, perfiles, transacciones.
+– Superficies: API pública, API interna, Webhooks, GraphQL.
+– Actores: usuarios legítimos, atacantes anónimos, insiders.
+– Escenarios: salto de flujo, manipulación de estado, ampliación de privilegios.
+
+Ejemplo.
+Activo: cupón de un solo uso.
+Escenario modelado: dos solicitudes simultáneas aplican el mismo cupón.
+Resultado esperado en análisis: condición de carrera, doble gasto.
+
+7. Roles de prueba
+   Función.
+   Se simula el sistema desde identidades diferentes.
+
+Tipos.
+– Anónimo.
+– Usuario normal.
+– Usuario premium.
+– Admin.
+– Integrador externo vía API token.
+
+Ejemplo.
+Un endpoint `POST /admin/inventory` debería fallar para un usuario normal. Si una prueba con ese rol devuelve éxito, la falla es categórica.
+
+8. Ingeniería social inversa
+   Función.
+   No manipula usuarios; manipula el sistema o procesos operativos para obtener información no prevista.
+
+Ejemplos.
+– Contactar soporte para solicitar detalles sobre una API “que no funciona” y obtener rutas internas.
+– Pedir reenvío de correo de validación y examinar el enlace para descubrir parámetros sensibles.
+
+Resultado.
+Aparecen endpoints que no estaban documentados y que luego pueden probarse.
+
+9. Revisión por pares
+   Función.
+   Otro analista revisa flujos, hallazgos y supuestos.
+
+Beneficio.
+– Elimina puntos ciegos.
+– Detecta rutas no exploradas.
+– Corrige interpretaciones erróneas de restricciones.
+
+Ejemplo.
+Un analista pasa por alto que un endpoint permite sobrescribir el campo `status`. El revisor observa el payload y detecta la manipulación.
+
+10. Pruebas exploratorias
+    Función.
+    Navegación libre y heurística para descubrir comportamientos anómalos.
+
+Técnicas.
+– Cambiar parámetros a valores absurdos.
+– Interrumpir procesos a mitad.
+– Repetir solicitudes rápidamente.
+– Saltar pasos del flujo.
+
+Ejemplo.
+El analista cambia `quantity=2` a `quantity=100000`. Si el servidor acepta el valor, se detecta un fallo lógico de límites.
+
+Conclusión.
+El análisis de lógica de negocio requiere combinar observación externa, acceso interno, modelado formal, simulación de roles y experimentación libre. Cada elemento revela un tipo de fallo distinto y juntos conforman una metodología completa para detectar vulnerabilidades que no dependen de exploits clásicos sino de decisiones inadecuadas en la arquitectura del sistema.
