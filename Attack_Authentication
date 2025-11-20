@@ -1,0 +1,310 @@
+# Ataques a la lógica de autenticación y cuentas: teoría, ejemplos y mitigaciones (Guía práctica para desarrolladores)
+
+## Introducción
+
+Esta guía descompone los vectores principales de ataque contra la lógica de autenticación y gestión de cuentas, muestra ejemplos reproducibles a nivel conceptual y entrega contramedidas técnicas y operativas. El objetivo es proporcionar un documento accionable para arquitectos, desarrolladores backend y equipos de seguridad que deben cerrar brechas de diseño —no solo errores de implementación— que permiten acceso no autorizado, enumeración, denegación y persistencia de sesiones.
+
+---
+
+## Índice
+
+1. Enumeración de usuarios
+2. Lógica de bloqueo de cuentas (lockout)
+3. Inyección en el flujo de login (login flow injection)
+4. Session fixation
+5. Mitigación de sesión (prácticas)
+6. Explotación por fallas de lógica (escenarios)
+7. Detección y pruebas
+8. Checklist operativo y ejemplos de código
+
+---
+
+## 1. Enumeración de usuarios
+
+### ¿Qué es?
+
+Técnicas que permiten a un atacante confirmar si una identidad (email, username, teléfono) existe en el sistema mediante diferencias observables en respuestas, tiempos o comportamientos de endpoints.
+
+### Señales habituales
+
+* Mensajes distintos para “usuario no encontrado” vs “contraseña incorrecta”.
+* Respuestas diferenciadas en el flujo de recuperación de contraseña.
+* Diferencias en latencia: consultas que devuelven más rápido cuando el registro existe.
+* Endpoints accesibles que devuelven metadatos incluso sin autenticación.
+
+### Ejemplo práctico (conceptual)
+
+Formulario de recuperación:
+
+```http
+POST /password-reset-request
+Body: { "email": "victima@example.com" }
+```
+
+Respuestas:
+
+* Si existe: `200 OK` – `{"message":"Correo enviado"}`
+* Si no existe: `404 Not Found` – `{"error":"Usuario no encontrado"}`
+
+Con este comportamiento el atacante lista direcciones y construye un mapa de cuentas.
+
+### Mitigaciones
+
+* Respuesta uniforme: devolver siempre el mismo mensaje (`200` con texto genérico).
+* Igualar tiempo de respuesta (o añadir retrasos controlados).
+* Rate limiting por IP y por patrón (por ejemplo, por dominio de emails).
+* Requerir CAPTCHA/Proof-of-Work en flujos de recuperación para grandes volúmenes.
+* Monitorizar patrones de descubrimiento (altos volúmenes de comprobación de emails desde una IP).
+
+---
+
+## 2. Lógica de bloqueo de cuentas (lockout)
+
+### Problema
+
+Bloquear cuentas tras X intentos fallidos sin considerar origen o contexto permite ataques DoS dirigidos: el atacante fuerza bloqueos sobre cuentas legítimas.
+
+### Modelos incorrectos
+
+* Bloqueo rígido por cuenta luego de N fallos (sin considerar IP/device).
+* Mensajes que confirman que la cuenta está bloqueada.
+* Bloqueo permanente sin vías seguras de desbloqueo.
+
+### Diseño seguro recomendado
+
+* **Backoff progresivo**: aumentar retrasos en fallos sucesivos en lugar de bloqueo inmediato.
+* **Throttling combinado**: por cuenta + por IP + por device fingerprint.
+* **Adaptive defenses**: si el riesgo es alto, elevar challenge (CAPTCHA, 2FA), no bloquear inmediatamente.
+* **Notificaciones**: enviar alertas al propietario de la cuenta tras X intentos fallidos.
+* **Soporte seguro para desbloqueo**: MFA o verificación robusta; evitar soporte que desbloquee sin verificación fuerte.
+
+### Ejemplo de algoritmo (simplificado)
+
+```text
+if failed_attempts(user) > 5 and failed_attempts(ip) > 20:
+    require_captcha(user)
+    require_captcha(ip)
+if failed_attempts(user) > 10:
+    enforce_temporary_lock(user, 10 minutes)
+```
+
+---
+
+## 3. Inyección en el flujo de login (Login Flow Injection)
+
+### Qué es
+
+Manipulación de parámetros o pasos en el flujo de autenticación para cambiar el comportamiento (ej.: `redirect`, flags, `skip_mfa`) y lograr bypass o phishing.
+
+### Vectores comunes
+
+* Parámetros `redirect` / `return_to` sin validación → open redirect o contexto mal establecido.
+* Flags de cliente (`skip_mfa`, `is_verified`) que el servidor toma en cuenta.
+* Flujos OAuth/OIDC con `state`/`nonce` mal implementados.
+
+### Ejemplo: parámetro `redirect` inseguro
+
+```http
+GET /login?redirect=https://malicious.example.com
+```
+
+Si el servidor redirige al `redirect` sin whitelist, el atacante induce a la víctima a autenticarse y recibe tokens/contexto.
+
+### Mitigaciones
+
+* Lista blanca de dominios/rutas válidas para `redirect`.
+* No confiar en flags enviados por el cliente para decisiones críticas.
+* En OAuth/OIDC: validar `state`, `nonce`, `aud`, `iss`, y firmar/validar tokens.
+* Registrar parámetros de flujo y monitorizar valores atípicos.
+
+---
+
+## 4. Session fixation
+
+### Definición
+
+El atacante fuerza que la víctima use un `session_id` conocido por el atacante; si el servidor no regenera la sesión al autenticar, el atacante reutiliza ese `session_id` y obtiene acceso.
+
+### Cómo se produce
+
+1. Atacante crea sesión controlada `sess=attacker123`.
+2. Induce a la víctima a usarla (link, cookie, subdominio).
+3. Víctima realiza login con esa sesión.
+4. Si el servidor no regenera ID, el atacante usa `sess=attacker123` y actúa como víctima.
+
+### Mitigaciones
+
+* **Regenerar session_id al login** y tras elevación de privilegios.
+* Vehicular session ID únicamente por cookies seguras (`HttpOnly`, `Secure`, `SameSite`).
+* No aceptar session id por URL.
+* Controlar binding de sesión a atributos opcionales (user-agent, device fingerprint) con tolerancia.
+* Detectar uso simultáneo de la misma sesión desde ubicaciones distintas y forzar reauth si hay divergencias críticas.
+
+### Ejemplo de regeneración en pseudocódigo (Node/Express)
+
+```js
+app.post('/login', async (req, res) => {
+  const user = await auth(req.body);
+  if (user) {
+    req.session.regenerate(err => {
+      if (err) throw err;
+      req.session.userId = user.id;
+      res.sendStatus(200);
+    });
+  }
+});
+```
+
+---
+
+## 5. Mitigación de sesión (prácticas concretas)
+
+### Configuración de cookies
+
+* `HttpOnly` — evita JS exfiltration.
+* `Secure` — envía solo por HTTPS.
+* `SameSite=Strict`/`Lax` — mitiga CSRF/CSRF-like.
+* `Path` y `Domain` limitados — reduce exposición cross-subdomain.
+
+### Tokens y rotación
+
+* Regenerar session id en login/elevación.
+* Refresh tokens con rotación y revocación: cuando se usa refresh token, emitir uno nuevo y anular el viejo.
+* Short-lived access tokens + refresh tokens para sesiones prolongadas.
+
+### Prevención de replay y reuse
+
+* Nonces y marca “usado” atómica en DB para operaciones críticas.
+* Idempotency tokens para endpoints que no deben repetirse.
+
+### Vinculación de sesión a contexto
+
+* Guardar metadata (device fingerprint, última IP) y usar evaluación de riesgo: si cambio significativo, exigir reauth o MFA.
+* Evitar reglas rígidas por IP (usuarios móviles).
+
+### Logout y revocación
+
+* Logout debe invalidar sesión en servidor y revocar refresh tokens.
+* Proveer revocación centralizada para sesiones (por usuario, por equipo de seguridad).
+
+---
+
+## 6. Explotación por fallas de lógica — escenarios ilustrativos
+
+### Escenario A: Bypass de MFA vía recovery flow
+
+* Recuperación de cuenta permite cambiar contraseña con solo un email clic.
+* Atacante con acceso al email de recuperación (phishing) omite MFA.
+  **Mitigación:** exigir el mismo nivel de verificación (MFA) para cambios sensibles; llevar registro de device/email y alertar.
+
+### Escenario B: Elevación por mass-assignment
+
+* Endpoint `PUT /user/profile` hace `update(req.body)` directamente.
+* Atacante envía `{ "is_admin": true }`.
+  **Mitigación:** whitelist de campos, mapping explícito.
+
+### Escenario C: Lockout dirigido (Denegación de servicio)
+
+* Atacante fuerza fallos en cuentas de empleados, provocando bloqueo.
+  **Mitigación:** combinación de throttles, backoff y notificaciones; reglas para detectar pattern de “targeted lockout”.
+
+### Escenario D: Replay de token de un solo uso
+
+* Token de restablecimiento no marcado como usado → puede reaplicarse.
+  **Mitigación:** marcar token como usado atómicamente en DB; expiraciones cortas.
+
+---
+
+## 7. Detección y pruebas
+
+### Métricas y alertas
+
+* Ratio de `login_failures / login_attempts` por cuenta e IP.
+* Incremento en solicitudes de `password-reset` para dominios específicos.
+* Picos de intentos de login desde una misma IP/agent.
+* Uso de la misma `session_id` desde múltiples IPs.
+
+### Pruebas recomendadas (autorizadas)
+
+* **Revisión de código** para puntos donde se asignan atributos de sesión y donde se aceptan flags del cliente.
+* **Caja blanca**: verificar regeneración de sesión y uso de cookies; revisar lógica de recuperación.
+* **Caja negra**: comprobar mensajes del recovery flow, probar enumeración de usuarios, simular intentos de lockout.
+* **Simulación de session fixation** con ambientes de testing: forzar cookie y comprobar si se regenera.
+* **Tests automatizados de mass-assignment**: enviar campos extras en payloads de actualización y confirmar que no se asignan.
+* **Pruebas de race conditions**: envíos concurrentes para endpoints que marcan recursos “usados” (cupones, tokens, stock).
+
+### Herramientas útiles
+
+* Burp Suite / Postman para manipular y repetir requests.
+* Fuzzers para parámetros de login, recovery y actualización.
+* Sistemas de simulación de tráfico (genera patrones de lockout/enum).
+* Logs estructurados y tracing distribuido para reconstruir flujos.
+
+---
+
+## 8. Checklist operativo y ejemplos de código
+
+### Checklist priorizado
+
+1. Regenerar session ID en login y elevaciones.
+2. Asegurar cookies (`HttpOnly`, `Secure`, `SameSite`).
+3. Unificar respuestas en endpoints que podrían revelar existencia de usuario.
+4. Implementar throttling/backoff combinado (por cuenta, IP, device).
+5. Whitelist de campos para updates (proteger contra mass-assignment).
+6. Marcar tokens de un solo uso como “usados” atómicamente.
+7. Validar y whitelist de `redirect`/`return_to`.
+8. Registrar y alertar patrones de enumeración y lockout.
+9. Revisar flujos de recovery con el mismo rigor que el login.
+10. Añadir pruebas automáticas que intenten bypass y asignación maliciosa.
+
+### Ejemplo: protección contra enumeración (pseudocódigo)
+
+```py
+def request_password_reset(email):
+    # Respuesta indiferenciada
+    schedule_reset_email_if_exists(email)
+    return {"message":"Si la cuenta existe, se enviaron instrucciones."}
+```
+
+### Ejemplo: idempotency + marca atómica en DB (SQL pseudo)
+
+```sql
+BEGIN;
+-- Marcar token como usado solo si aún no lo está
+UPDATE reset_tokens
+SET used = TRUE, used_at = NOW()
+WHERE token = :token AND used = FALSE;
+IF rows_affected = 1 THEN
+  -- procesar reset
+  UPDATE users SET password = :new_password WHERE id = token.user_id;
+  COMMIT;
+ELSE
+  ROLLBACK;
+  RETURN "token inválido o ya usado";
+END IF;
+```
+
+### Ejemplo Node: regenerar sesión (Express)
+
+```js
+app.post('/login', async (req, res) => {
+  const user = await auth(req.body);
+  if (!user) return res.status(401).send({error:'invalid'});
+  req.session.regenerate(err => {
+    if (err) return res.status(500).send({error:'session_error'});
+    req.session.userId = user.id;
+    res.cookie('session', req.session.id, { httpOnly: true, secure: true, sameSite: 'Lax' });
+    res.send({ok:true});
+  });
+});
+```
+
+---
+
+## Conclusión técnica (prioridades de remediación)
+
+* El principio guía es **no confiar en el cliente** para decisiones de autenticación, autorización o estado.
+* Implementar defensas en varias capas: diseño (flujos y políticas), implementación (regeneración de sesiones, whitelists) y operaciones (monitorización y alertas).
+* Priorizar mitigaciones que impidan enumeración y session fixation, y añadir pruebas automatizadas que verifiquen que las protecciones funcionan bajo condiciones de abuso.
+
+Fin.
