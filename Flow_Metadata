@@ -1,0 +1,346 @@
+# Flujo de metadatos, archivos de respaldo y explotación en cadena — guía práctica para desarrolladores y equipos de seguridad
+
+## Resumen
+
+Este artículo describe, con ejemplos y recomendaciones prácticas, las amenazas derivadas del **flujo de metadatos**, **archivos de respaldo expuestos**, **revelación de IDs sensibles**, **explotación por cascada**, y **abuso del manejo de envíos**. Cubre además defensas concretas: mitigación de backups, tratamiento de `robots.txt`, y cómo se aprovechan herramientas tipo DirBuster. Incluye checklists y snippets de configuración para implementar contramedidas hoy mismo.
+
+---
+
+## 1. Flujo de metadatos — qué es y por qué importa
+
+### Definición
+
+Los **metadatos** son datos auxiliares incluidos en archivos, cabeceras HTTP o respuestas del sistema que describen propiedades del contenido (autor, rutas, versiones, timestamps, GPS, GUIDs, etc.). No siempre son visibles en la UI, pero pueden filtrar información sensible sobre la infraestructura, rutas internas y credenciales tácitas.
+
+### Ejemplos concretos
+
+* Imagen JPG subida por un usuario contiene EXIF con coordenadas GPS (`GPSLatitude`, `GPSLongitude`), modelo de cámara y usuario.
+* Documento Word (`.docx`) contiene propiedades: autor (`Company\Admin`), rutas locales (`C:\Users\Admin\Documents\secret.docx`) y revisiones.
+* Respuesta HTTP incluye `X-Powered-By: Express/4.17.1` o `Server: Apache/2.4.41` exponiendo versiones.
+* PDF con comentarios que contienen nombres y rutas internas.
+
+### Riesgos
+
+* Mapeo de infraestructura: saber subdominios o nombres de servidores (`staging-app-03`).
+* Descubrimiento de paths y artefactos (ej.: `/var/www/staging/backup.zip`).
+* Datos personales (ubicación GPS) → violaciones de privacidad.
+* Identificación de versiones vulnerables para exploits conocidos.
+
+### Detección rápida
+
+* Escanear uploads para EXIF/metadata.
+* Revisar logs/respuestas por cabeceras reveladoras.
+* Buscar propiedades internas en documentos de Office/PDF.
+
+### Mitigación práctica
+
+1. **Sanitizar uploads**: eliminar EXIF y propiedades Office/PDF en el pipeline de ingestión.
+
+   * Herramienta: `exiftool -all= file.jpg` (procesar en servidor).
+2. **Quitar headers informativos** en el servidor web:
+
+   * Nginx: `server_tokens off;` eliminar `Server` con `more_clear_headers` o módulo equivalente.
+3. **Previsualización segura**: generar versiones derivadas (miniaturas) sin metadata para mostrar en la UI.
+4. **Política de privacidad**: advertir usuarios y permitir limpieza automática en subida.
+
+---
+
+## 2. Archivos de respaldo — causa raíz y ejemplos
+
+### Qué son
+
+Archivos dejados por desarrolladores, procesos de despliegue o backups automáticos: `.bak`, `.old`, `config.php.bak`, `db.dump`, `staging.zip`, `backup.tar.gz`.
+
+### Ejemplos prácticos de exposición
+
+* `https://example.com/config.php.bak` → contenido con credenciales DB.
+* `https://example.com/backup/db.sqlite.bak` → base de datos descargable sin autenticación.
+* Repositorios públicos que incluyen `.env` en una rama antigua.
+
+### Riesgo
+
+Exposición completa del código, credenciales de servicios, secretos, llaves SSH/API, y por ende acceso a producción o compromisos en cadena.
+
+### Detección y pruebas
+
+* Hacer búsquedas dirigidas por extensiones (`.bak`, `.old`, `.zip`) con herramientas de scanning.
+* Revisar reglas de deploy/CI para evitar artefactos en artefactos públicos.
+* Uso de crawler/dirbuster para descubrir archivos accesibles.
+
+### Mitigación inmediata
+
+1. **No servir backups desde el root web**: ubicar backups en storage privado (S3 con bucket privado).
+2. **Reglas del servidor para bloquear extensiones**:
+
+   * Nginx config:
+
+     ```nginx
+     location ~* \.(bak|old|sql|tar|gz|zip|env)$ {
+       deny all;
+       return 404;
+     }
+     ```
+3. **CI/CD**: agregar paso que detecte archivos de backup antes del deploy y falle el pipeline.
+4. **Encriptar backups** y rotación de llaves.
+5. **Permisos estrictos** en el filesystem (backup accesible solo por el usuario de backup).
+
+---
+
+## 3. Revelación de ID sensible (Sensitive ID Disclosure)
+
+### Definición
+
+Exponer identificadores que permiten enumeración o predecir otras entidades: IDs secuenciales, números de pedido, rutas que contienen IDs predecibles.
+
+### Ejemplos
+
+* URL: `GET /orders/10021` → cambiar a `10020` para ver otra orden (IDOR/BOLA).
+* JWT que incluye `internal_id` sin restricciones.
+* Nombres de archivo con `project-12345-secret.key`.
+
+### Riesgo
+
+Facilita IDOR, scraping masivo, correlación con otros sistemas y pivot hacia recursos sensibles.
+
+### Mitigación
+
+1. **Usar IDs no predecibles**: UUIDv4, ULID o hashes no reversibles.
+2. **Autorizar por objeto**: siempre `SELECT ... WHERE id = ? AND owner_id = ?`. No confiar solo en la presencia del ID.
+3. **Evitar exponer IDs internos** en URLs públicas o documentos.
+4. **Rotación y expiración de referencias**: si emites enlaces públicos, que caduquen (signed URLs).
+
+### Ejemplo de consulta segura (SQL)
+
+```sql
+SELECT * FROM orders WHERE id = :id AND user_id = :current_user_id;
+```
+
+---
+
+## 4. Explotación por cascada — cómo pequeñas fugas se encadenan
+
+### Concepto
+
+Una secuencia de pequeñas filtraciones independientes (metadata, backup accesible, ID predecible, API insegura) puede combinarse para obtener acceso completo. Cada fallo por separado puede parecer inofensivo; juntos forman un camino de ataque.
+
+### Cadena típica (modelo de ejemplo)
+
+1. `robots.txt` revela `/backup/`.
+2. DirBuster descubre `backup.zip`.
+3. `backup.zip` contiene `db.dump` con credenciales.
+4. Credenciales permiten acceder a panel interno.
+5. Panel interno expone API con endpoints sin autorización por objeto → IDOR.
+6. Aprovechando IDOR, atacante cambia dirección de envío y roba bienes.
+
+### Caso práctico (step-by-step)
+
+* `robots.txt`:
+
+  ```
+  User-agent: *
+  Disallow: /backup/
+  ```
+* `GET /backup/backup-2025.zip` → 200 OK.
+* Dentro: `config/.env` con `DB_USER=prod_user` y `DB_PASS=Sup3rS3cret`.
+* Con credenciales, se conecta a la base y extrae `orders` table con `order_id` secuencial y `shipping_address`.
+* Usando API `PATCH /orders/:id/shipping`, sin autorización por propietario, cambia direcciones.
+
+### Mitigación contra cascadas
+
+* **Defensa en profundidad**: cada capa asume que las capas inferiores pueden fallar. No confiar en `robots.txt` ni en obscuridad.
+* **Principio de menor privilegio**: credenciales en backups deben tener permisos mínimos.
+* **Segmentación**: backups y artefactos deben estar fuera de la superficie pública y protegidos por autenticación fuerte.
+* **Hardening de APIs**: checks por objeto/propietario, validación de inputs y logs.
+* **Auditoría y alertas**: detectar accesos masivos a backups o descargas fuera de horarios normales.
+
+---
+
+## 5. Manejo detallado de envíos (shipping) — puntos de conflicto y abusos
+
+### Área de riesgo
+
+Flujos de compra y envío suelen aceptar datos del cliente (dirección, shipping_cost, method). Cuando estos valores afectan cobros o logística, confiar en el cliente provoca fraude.
+
+### Vectores comunes
+
+* **price/shipping_cost en el cliente**: cliente envía precio total modificado.
+* **address manipulation**: cambiar `receiverAddress` para redirigir envío.
+* **method downgrading**: elegir método de envío más barato después de que la orden haya sido procesada.
+* **address reuse/fraudful pickup**: cambiar datos para recibir bienes en un punto de entrega distinto.
+
+### Ejemplos concretos
+
+1. **Precio manipulado**: Request:
+
+   ```json
+   POST /checkout
+   {
+     "product_id": 42,
+     "qty": 1,
+     "price": 1.00,
+     "shipping_cost": 0.00
+   }
+   ```
+
+   Si backend acepta `price` del cliente → venta por $1.
+2. **Address change via IDOR**:
+
+   * Attacker descubre `PATCH /orders/1001` que acepta `{ "shipping_address": "addr" }` sin verificar propietario → redirige pedido.
+
+### Mitigaciones específicas
+
+1. **Recalcular valores en server-side**: precio, impuestos, shipping_cost obtenidos desde catálogo/servicios internos.
+2. **Autorización por objeto**: validar que el actor que modifica una orden es su propietario o tiene permiso explícito.
+3. **Tokens de operación**: generación de un `checkout_token` firmado por servidor al iniciar flujo — el cliente envía sólo token + selección; servidor decide precio.
+4. **Reserva atómica**: reservar stock y marcar pedido como “pending” con IDempotency token; no permitir cambios sin revalidación.
+5. **Checks antifraude**: score por dispositivo, velocity checks por múltiples direcciones en poco tiempo, verificación manual para pedidos de alto valor.
+6. **Notificación y confirmación**: enviar email/SMS de confirmación de dirección y requerir verificación para cambios sensibles.
+
+### Ejemplo: token firmado para checkout (pseudocódigo)
+
+* Server:
+
+  ```py
+  token = HMAC(secret, f"{product_id}:{qty}:{price_server}:{expires_at}")
+  ```
+* Client envia `{ token }`, server valida HMAC y expiración, ignora `client.price`.
+
+---
+
+## 6. Mitigación de respaldo — prácticas operativas detalladas
+
+### Reglas de almacenamiento
+
+* **Backups fuera del root web**: usar almacenamiento privado (S3 private bucket, NFS con permisos restringidos).
+* **Acceso controlado**: sólo el servicio de backups y los administradores deben poder leerlos.
+* **Cifrado en reposo**: E2EE para backups sensibles.
+* **Rotación de credenciales**: si una credencial aparece en backup, debe rotarse en cuanto se detecte.
+
+### Proceso CI/CD
+
+* Paso en pipeline que falla si detecta archivos con extensiones peligrosas o `.env` dentro del artefacto.
+* Hooks pre-commit que previenen subir secrets a repos.
+
+### Monitoreo y alertas
+
+* Detectar descargas de backups o archivos con patrones de búsqueda masiva.
+* Registrar usuarios que acceden al bucket de backups y alertar fuera horario.
+
+### Políticas de eliminación
+
+* No mantener backups con información sensible más tiempo del necesario.
+* Mantener inventario de backups y quién tiene acceso.
+
+---
+
+## 7. robots.txt y DirBuster — por qué el “no index” puede guiar al atacante
+
+### robots.txt: qué es y por qué no es seguridad
+
+`robots.txt` indica a buscadores qué rutas NO indexar. Es público y **no** debe usarse para ocultar recursos sensibles. Incluir rutas sensibles en `Disallow` es equivalente a publicar una lista de ubicaciones a investigar.
+
+#### Ejemplo erróneo
+
+```
+User-agent: *
+Disallow: /admin/
+Disallow: /backup/
+```
+
+Un atacante utiliza ese archivo como checklist.
+
+### Buenas prácticas con robots.txt
+
+* No listarlos directorios sensibles.
+* Si necesitas evitar indexación de contenido dinámico, usa `X-Robots-Tag: noindex` en respuestas autenticadas o en páginas controladas; no uses `Disallow` para ocultar rutas críticas.
+* Evitar exponer `/staging/` o `/backup/` en robots.
+
+### DirBuster (y herramientas similares)
+
+Herramientas que enumeran directorios y archivos mediante diccionarios; automatizan búsqueda de `admin`, `backup.zip`, `.git`, `.env`, etc.
+
+#### Cómo actúa un atacante
+
+* Ejecuta listas de rutas comunes y extensiones.
+* Interpreta códigos HTTP (200 OK, 403 Forbidden, 301/302) y timbraos (200 con contenido útil) para listar recursos.
+
+#### Mitigaciones frente a DirBuster
+
+1. **No dejar directorios no utilizados** ni archivos de prueba en producción.
+2. **Rate limiting** y WAF para detectar patrones de scanning y bloquear IPs agresivas.
+3. **Respuesta uniforme** para rutas inexistentes vs. no autorizadas (evitar 200 OK para páginas de error).
+4. **Honeypots y tar pit**: trampas para detectar versátiles scans sin exponer activos reales.
+
+---
+
+## 8. Checklist operativo final (prioridad alta → baja)
+
+1. Eliminar metadatos en todo pipeline de uploads (EXIF, Office props, PDF metadata).
+2. Asegurar backups fuera del root público; aplicar cifrado y control de acceso.
+3. Bloquear en servidor el acceso a extensiones de respaldo y config (`deny all` para `.bak`, `.env`, `.sql`).
+4. Revisar `robots.txt`: eliminar referencias a rutas sensibles.
+5. Reemplazar IDs secuenciales por UUID/ULID y autorizar por objeto en consultas.
+6. Recalcular precios/fees/shipping en backend y utilizar checkout_token firmado.
+7. Implementar WAF/rate limiting para detección de DirBuster y bloqueos de scanning.
+8. Agregar CI/CD checks para artefactos que contengan archivos prohibidos.
+9. Auditar logs para accesos inusuales a archivos estáticos y descargas de backups.
+10. Mantener un playbook de respuesta (rotación de credenciales, invalidación de tokens) para casos de filtración.
+
+---
+
+## 9. Ejemplos rápidos: snippets y comandos útiles
+
+* **Eliminar EXIF en Linux**:
+
+  ```bash
+  exiftool -all= -overwrite_original image.jpg
+  ```
+* **Nginx: negar ext. de backup**:
+
+  ```nginx
+  location ~* \.(bak|env|sql|zip|tar|gz)$ {
+    deny all;
+    return 404;
+  }
+  ```
+* **Generar UUID en base de datos (Postgres)**:
+
+  ```sql
+  CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+  ALTER TABLE orders ALTER COLUMN id SET DEFAULT uuid_generate_v4();
+  ```
+* **HMAC simple para token firmado (Python)**:
+
+  ```py
+  import hmac, hashlib, time
+  secret = b's3cret'
+  payload = f"{product_id}:{qty}:{price}:{int(time.time())+300}"
+  token = hmac.new(secret, payload.encode(), hashlib.sha256).hexdigest()
+  ```
+* **Comprobar backups en CI (shell)**:
+
+  ```bash
+  if git ls-files | grep -E "\.env|\.bak|\.sql"; then
+    echo "Prohibited file detected" && exit 1
+  fi
+  ```
+
+---
+
+## 10. Resumen ejecutivo
+
+* Las fugas menores (metadatos, backups, `robots.txt`) son vectores de reconocimiento poderosos.
+* La explotación por **cascada** es el ataque lógico más rentable: combinar pequeñas filtraciones para comprometer todo.
+* Defensa eficaz = **defensa en profundidad**: sanitización, almacenamiento seguro, hardening del servidor, autorización por objeto y monitoreo.
+* Priorizar cambios que reduzcan la blast radius: no exponer backups, no confiar en `robots.txt`, no aceptar datos sensibles del cliente.
+
+---
+
+## Recursos de acción inmediata
+
+* Añadir sanitización de metadata al pipeline de archivos en 24–48 horas.
+* Revisar y bloquear artefactos `.bak`, `.env`, `.zip` en servidor.
+* Revisar `robots.txt` y limpiar cualquier `Disallow` que revele rutas sensibles.
+* Implementar un job CI que falle si backups o `.env` aparecen en artefactos de release.
+
+Fin.
