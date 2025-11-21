@@ -1,0 +1,230 @@
+# Ataques a mecanismos de control y control de acceso (guía técnica con ejemplos)
+
+## Resumen ejecutivo
+
+Explicación técnica y práctica de: ataques a mecanismos de control, la tríada AAA, huella digital única, Broken Access Control (incl. IDOR, BFLA, GATE), escalada horizontal/vertical, vectores comunes, riesgos y controles para autenticación insegura. Cada sección incluye ejemplos de código vulnerables y correcciones defensivas.
+
+---
+
+## 1. Triada AAA (Autenticación, Autorización, Accountability)
+
+* **Autenticación**: confirmar identidad (ej.: password, certificado, token).
+* **Autorización**: decidir qué recursos/operaciones permite esa identidad (roles, políticas).
+* **Accountability / Auditoría**: registrar quién hizo qué y cuándo (logs inmutables, correlación).
+
+Diseño seguro: separación de responsabilidades, control en servidor (no confiar en el cliente), registros con contexto (user-id, request-id, trace).
+
+---
+
+## 2. Ataques a mecanismos de control — objetivo y principio
+
+Objetivo: interrumpir, evadir o manipular los controles AAA para obtener acceso, alterar privilegios o borrar trazas.
+Técnicas principales: bypass de validaciones, manipulación de parámetros, replay, forzamiento de sesiones, elevación de privilegios por diseño inseguro.
+
+---
+
+## 3. Huella digital única (device / principal fingerprinting)
+
+* Concepto: identificar entidad/cliente por características estables (UA, SHA de cert, combinación de atributos).
+* Uso legítimo: detección de fraude, correlación de sesiones.
+* Riesgos: propicia tracking, falsificación si la huella usa atributos triviales; colisiones si no se usan suficientes entropías.
+
+Implementación segura (principios):
+
+* usar múltiples señales resistentes a manipulación (certificados, TPM-attestation, HMAC sobre un secreto del servidor),
+* no derivar decisiones de seguridad únicamente de huellas sin revalidación,
+* respetar privacidad y retención mínima.
+
+---
+
+## 4. Broken Access Control — patrones y ejemplos
+
+### A. IDOR (Insecure Direct Object Reference)
+
+**Vulnerabilidad típica:** el servidor devuelve objetos basándose solo en un identificador entregado por el cliente sin verificar permisos.
+
+Ejemplo vulnerable (pseudo-Express):
+
+```js
+// VULNERABLE
+app.get('/invoices/:id', async (req, res) => {
+  const invoice = await db.findInvoiceById(req.params.id);
+  res.json(invoice); // no se verifica si req.user puede ver invoice
+});
+```
+
+Corrección:
+
+```js
+app.get('/invoices/:id', async (req, res) => {
+  const invoice = await db.findInvoiceById(req.params.id);
+  if (!invoice) return res.sendStatus(404);
+  if (invoice.ownerId !== req.user.id && !req.user.isAdmin) return res.sendStatus(403);
+  res.json(invoice);
+});
+```
+
+Mejor práctica: política central de autorización, funciones reutilizables `canAccess(user, resource, action)`.
+
+### B. BFLA (Broken Function Level Authorization)
+
+**Ejemplo:** endpoints administrativos disponibles sin verificación por rol.
+
+```js
+// VULNERABLE
+app.post('/users/:id/impersonate', (req, res) => {
+  // ejecuta impersonation sin chequear rol
+});
+```
+
+Corrección: aplicar guardas por función:
+
+```js
+if (!req.user.roles.includes('admin')) return res.sendStatus(403);
+```
+
+Mejor práctica: verificar autorización al nivel de función y recurso, no sólo UI.
+
+### C. GATE (General Access To Everything)
+
+Descripción: diseño donde un control central es inexistente o fácilmente eludible, p. ej. endpoints que confían en parámetros cliente para decidir permisos. Mitigación: implementación de gateway de autorización o middleware que aplique políticas ABAC/RBAC centralizadas y control de path+action.
+
+---
+
+## 5. Escalada de privilegios: horizontal y vertical
+
+* **Escalada horizontal**: un actor accede a recursos de otro actor con el mismo nivel (ej.: ver facturas de otro usuario por ID predecible). Prevención: chequear `resource.owner == req.user.id`.
+* **Escalada vertical**: un actor obtiene un rol mayor (ej.: usuario → admin) por manipular campos ocultos o flujos. Prevención: impedir que el cliente envíe su propio rol; validar rol en servidor y usar controles de cambio de rol solo por procesos autorizados y auditados.
+
+Ejemplo de prevención al crear usuario:
+
+```sql
+-- No permitir que el campo 'isAdmin' venga del cliente
+INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'user');
+```
+
+---
+
+## 6. Vectores comunes
+
+* Parámetros HTTP manipulables (path, query, body).
+* Cabeceras (X-Forwarded-For, Referer).
+* JWT mal configurados (alg none, sin verificación de firma, sin `aud`/`iss`).
+* Cookies inseguras (sin `HttpOnly`, sin `Secure`, sin `SameSite`).
+* APIs CRUD con objetos numerados secuencialmente.
+* Webhooks/colas que aceptan payloads sin firma.
+* Funciones serverless expuestas mas allá del mínimo necesario.
+
+---
+
+## 7. BFLA vs IDOR (comparación práctica)
+
+* **IDOR**: falla en verificar permiso sobre un objeto cuando se accede por ID.
+* **BFLA**: falla en verificar que el usuario puede ejecutar cierta función (nivel de función), incluso si el objeto no es sensible.
+  Ambos requieren controles de autorización server-side y pruebas de aceptación que ejerciten roles distintos.
+
+---
+
+## 8. Autenticación insegura — fallos y contramedidas
+
+Fallos frecuentes:
+
+* contraseñas almacenadas en texto o con hashing débil,
+* no usar TLS en transporte,
+* tokens sin expiración o sin revocación,
+* sesiones predecibles,
+* ausencia de MFA,
+* reutilizar JWT sin validar `iat`, `exp`, `nbf`, `iss`, `aud`.
+
+Contramedidas:
+
+* **Contraseñas**: usar hashing adaptativo (bcrypt/Argon2) con salt por usuario.
+* **Transporte**: HTTPS obligatorio; HSTS; no permitir mixed content.
+* **Tokens**: JWTs con firmas robustas (RS256/ES256), validar `exp`, `aud`, `iss`. Evitar almacenamiento en localStorage para tokens de largo lived; preferir cookies `HttpOnly Secure SameSite=Strict` con CSRF tokens.
+* **MFA**: TOTP o FIDO2/WebAuthn para acciones sensibles.
+* **Sesiones**: revocación (blacklist), rotación del refresh token, tiempo de inactividad, limitación por IP/device fingerprint.
+* **Bloqueos y detección**: throttling, rate-limits, alertas ante intentos repetidos, detección de credenciales filtradas.
+
+Ejemplo seguro de validación JWT (Node, pseudocódigo):
+
+```js
+const payload = jwt.verify(token, publicKey, { algorithms: ['RS256'], audience: 'api.example', issuer: 'auth.example' });
+if (payload.exp * 1000 < Date.now()) throw new Error('expired');
+```
+
+---
+
+## 9. BF(L)A — ejemplos y mitigación técnica
+
+* **Escenario**: endpoint `/orders/ship` que puede ser llamado por cualquier cliente y cambia estado a `shipped`.
+* **Vulnerabilidad**: servidor no valida que quien llama tenga permiso `ship_orders`.
+* **Mitigación**:
+
+  * declarar permisos por función: `ship_orders` y comprobar `if (!hasPermission(user, 'ship_orders')) 403`.
+  * pruebas automáticas que ejecuten endpoints con roles distintos.
+  * principle of least privilege en tokens (scopes).
+
+---
+
+## 10. Riesgos reales y impacto
+
+* Exfiltración de PII y secretos.
+* Pérdida de integridad de datos y operaciones (p. ej. cambiar precios, estados).
+* Compromiso lateral y toma de control de cuentas administrativas.
+* Cumplimiento y multas (GDPR, PCI-DSS, etc.).
+* Reputación y pérdida de negocio.
+
+Medir impacto: identificar activos críticos, calcular confidencialidad-integridad-disponibilidad (CIA) y priorizar mitigaciones por riesgo.
+
+---
+
+## 11. Detección, pruebas y hardening
+
+* **Revisión de código**: buscar accesos a recursos sin `authz` server-side.
+* **Pruebas dinámicas**: fuzzing de IDs, pruebas de roles, permutación de parámetros (IDOR testing).
+* **Unit/integration tests**: casos que simulen usuarios con distintos roles.
+* **WAF y Runtime**: reglas para detectar cambios masivos, patrones de enumeration.
+* **Observabilidad**: logs con request-id, user-id, action, status; alertas en anomalías (p. ej. patrón de acceso a objetos secuenciales).
+* **Red team / bug bounty**: ejercicios controlados para encontrar fallos reales.
+
+---
+
+## 12. Checklist de mitigación rápida (prioridad)
+
+1. Todas las rutas que acceden a recursos: validar autorización server-side.
+2. Centralizar política de autorización (middleware / PDP).
+3. Rechazar cualquier intento de cambiar `role`/`isAdmin` desde cliente.
+4. Usar hashing seguro para credenciales + MFA.
+5. Configurar JWT correctamente (firma, `exp`, `aud`, `iss`).
+6. Cookies seguras (`HttpOnly`, `Secure`, `SameSite`).
+7. Rate-limiting y detección de enumeration.
+8. Auditoría inmutable y revisión periódica de logs.
+9. Tests automatizados que cubran escenarios de acceso por rol.
+10. Minimizar superficie: exponer sólo lo necesario y aplicar principle of least privilege.
+
+---
+
+## 13. Ejemplos prácticos resumidos
+
+### Vulnerable: objeto numerado secuencial
+
+`GET /users/1001/profile` → devuelve datos de `1001` sin verificar `req.user`.
+**Fix**: `if (profile.userId !== req.user.id) 403`.
+
+### Vulnerable: función admin disponible
+
+`POST /products/:id/discount` → aplica descuento sin validar scope.
+**Fix**: `requireScope(req.user, 'product:discount')`.
+
+### Vulnerable: JWT sin `aud` ni `iss`
+
+`jwt.verify(token, secret)` — acepta tokens de cualquier issuer.
+**Fix**: `jwt.verify(token, publicKey, { audience: 'api', issuer: 'auth' })`.
+
+---
+
+## 14. Conclusión técnica
+
+Los fallos en mecanismos de control surgen por confiar en el cliente, ausencia de validación server-side y diseño de autorización disperso. Construir controles centrados en servidor, auditar funciones sensibles y automatizar pruebas por roles reduce la superficie de ataque. Priorizar: validación de acceso por recurso, manejo correcto de tokens/sesiones y trazabilidad de acciones.
+
+---
