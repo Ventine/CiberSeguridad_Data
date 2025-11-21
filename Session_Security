@@ -1,0 +1,272 @@
+# Seguridad de sesiones y autenticación moderna: guía técnica con ejemplos
+
+## Introducción
+
+Explicación técnica y práctica de: session fixation, caducación insegura y recomendada, almacenamiento seguro de sesión, mecanismos modernos de autenticación, MFA, TOTP, notificaciones push como factor de posesión, y FIDO2. Incluye ejemplos de código vulnerables y correcciones.
+
+---
+
+## 1. Session Fixation
+
+### Concepto
+
+El atacante proporciona al usuario un identificador de sesión *antes* de que el usuario se autentique. Si la aplicación no regenera la sesión tras el login, ambos comparten la misma sesión y el atacante obtiene acceso completo.
+
+### Ejemplo vulnerable (Express)
+
+```js
+// VULNERABLE
+app.post('/login', async (req, res) => {
+  const user = await auth(req.body.username, req.body.password);
+  if (!user) return res.sendStatus(401);
+  req.session.userId = user.id; // reutiliza el mismo sessionId
+  res.send('ok');
+});
+```
+
+### Corrección
+
+Regenerar sesión al autenticar:
+
+```js
+app.post('/login', (req, res) => {
+  auth(req.body.username, req.body.password).then(user => {
+    if (!user) return res.sendStatus(401);
+    req.session.regenerate(err => {
+      if (err) return res.sendStatus(500);
+      req.session.userId = user.id;
+      res.send('ok');
+    });
+  });
+});
+```
+
+### Controles adicionales
+
+* Rechazar `sessionId` no emitidos por el servidor.
+* Cookies con `HttpOnly`, `Secure`, `SameSite=Strict`.
+* Invalidar cualquier sesión previa del usuario al entrar.
+
+---
+
+## 2. Caducación insegura
+
+### Concepto
+
+Sesiones o tokens que nunca expiran o expiran demasiado tarde. Riesgos: robo permanente de sesión, imposibilidad de revocación, persistencia de accesos comprometidos.
+
+### Ejemplos de caducación insegura
+
+* JWT sin `exp`:
+
+```json
+{
+  "alg": "HS256",
+  "exp": null
+}
+```
+
+* Cookies con TTL infinito.
+* Sessión en Redis sin TTL (`set('sid', data)` sin `EX`).
+
+---
+
+## 3. Caducación recomendada
+
+### Parámetros orientativos
+
+* **Sesiones interactivas (web):** 5–15 minutos de inactividad, 8–12 horas máximo de vida.
+* **Tokens de acceso OAuth2:** 5–15 minutos.
+* **Refresh tokens:** 1–12 horas según criticidad.
+* **Sesiones altamente sensibles:** 2–5 minutos de inactividad y revalidación MFA en funciones críticas.
+
+### Ejemplo seguro en Redis
+
+```js
+redis.set(`sess:${sid}`, json, { EX: 900 }); // 15 minutos
+```
+
+### Rotación segura
+
+* Rotación obligatoria de refresh tokens.
+* Revocación inmediata mediante backend (blacklist o invalidación por versión).
+* Regenerar sesión tras eventos sensibles (cambio de contraseña, cambio de rol).
+
+---
+
+## 4. Almacenamiento de sesión
+
+### A. Lado servidor (recomendado)
+
+Uso de identificadores opacos y validación centralizada.
+
+Ejemplo seguro:
+
+```js
+// sessionId opaco y sin datos de identidad
+Set-Cookie: sid=3f92a1...; HttpOnly; Secure; SameSite=Strict
+```
+
+El servidor mantiene:
+
+```js
+sess:3f92a1... -> { userId: 42, createdAt: 1700000000, ipHash: "..." }
+```
+
+### B. Lado cliente
+
+* Usar exclusivamente cookies `HttpOnly Secure SameSite=Strict`.
+* No almacenar tokens sensibles en localStorage.
+* Evitar en cookies datos de identidad o roles. Solo IDs opacos.
+
+---
+
+## 5. Mecanismos modernos de autenticación
+
+### OAuth2 / OIDC
+
+Separan autenticación (OIDC) de autorización (OAuth2).
+Flujos modernos: Authorization Code con PKCE.
+Beneficio: mínimos secretos en cliente, mitigación contra interceptación.
+
+### Ejemplo de solicitud OIDC
+
+```
+GET /authorize?
+ client_id=webapp
+ &redirect_uri=https://app/callback
+ &response_type=code
+ &scope=openid profile
+ &code_challenge=XYZ
+```
+
+### WebAuthn / FIDO2
+
+Autenticación basada en criptografía de clave pública.
+Sin contraseñas. Sin secretos compartidos. Resistente a phishing.
+
+---
+
+## 6. MFA (Multi-Factor Authentication)
+
+### Principio
+
+Combinación de factores independientes:
+
+* *Conocimiento:* contraseña.
+* *Posesión:* dispositivo, llave de hardware.
+* *Inherencia:* biometría.
+
+El segundo factor debe activarse en login inicial y en elevaciones de privilegio.
+
+---
+
+## 7. TOTP (Time-Based One-Time Password)
+
+### Funcionamiento
+
+Cliente y servidor comparten una semilla secreta.
+Cada 30 segundos ambos generan un código basado en tiempo.
+
+### Ejemplo de verificación (Node)
+
+```js
+const speakeasy = require('speakeasy');
+
+const ok = speakeasy.totp.verify({
+  secret: user.totpSecret,
+  encoding: 'base32',
+  token: req.body.code,
+  window: 1
+});
+if (!ok) return res.sendStatus(401);
+```
+
+### Riesgos
+
+* Phishing del código.
+* Replay dentro de la ventana válida.
+* Robo del secreto si se almacena incorrectamente.
+
+Mitigaciones: entrega inicial segura, cifrado del secreto en reposo, detección de uso repetido.
+
+---
+
+## 8. Factor push (GTP / token generado por push)
+
+### Concepto
+
+La app del usuario recibe notificación y firma la aprobación localmente.
+Ventaja: el usuario confirma intención. Menor vulnerabilidad a phishing.
+
+### Implementación conceptual
+
+1. Servidor envía desafío al dispositivo.
+2. La app firma el desafío con clave privada local.
+3. El servidor verifica la firma con la clave pública registrada.
+
+Riesgoso solo ante ataques de fatiga (spam de notificaciones).
+
+---
+
+## 9. FIDO2 (WebAuthn)
+
+### Funcionamiento
+
+El autenticador (TPM, Secure Enclave, YubiKey) genera un par de claves.
+El servidor almacena solo la clave pública.
+La autenticación se realiza firmando un desafío único.
+
+### Ejemplo simplificado de registro (WebAuthn)
+
+```js
+const options = generateRegistrationOptions({
+  rpName: "Example",
+  userID: "42",
+  userName: "user@example"
+});
+```
+
+### Ejemplo simplificado de autenticación
+
+```js
+const options = generateAuthenticationOptions({
+  allowCredentials: [ { id: user.credentialId, type: 'public-key' } ]
+});
+```
+
+### Ventajas
+
+* No hay contraseña que robar.
+* No susceptible a phishing ni replay.
+* Clave privada nunca abandona el dispositivo.
+
+---
+
+## 10. Comparativa rápida
+
+| Mecanismo  | Seguridad | Phishing-Resistant | Dependencia de secreto compartido | Recomendado            |
+| ---------- | --------- | ------------------ | --------------------------------- | ---------------------- |
+| Contraseña | baja      | no                 | n/a                               | solo combinada con MFA |
+| TOTP       | media     | no                 | sí                                | aceptable              |
+| Push       | alta      | parcialmente       | no                                | bueno                  |
+| FIDO2      | muy alta  | sí                 | no                                | óptimo                 |
+
+---
+
+## 11. Prácticas recomendadas integrales
+
+1. Regenerar sesión tras login.
+2. TTL corto y revocación activa.
+3. Identificadores opacos; validación en backend.
+4. Cookies `HttpOnly Secure SameSite=Strict`.
+5. No almacenar tokens en localStorage.
+6. MFA obligatorio en funciones críticas.
+7. Preferir FIDO2 para eliminación progresiva de contraseñas.
+8. Monitorear anomalías: repetición de TOTP, notificaciones push rechazadas, intentos con tokens expirados.
+
+---
+
+## Conclusión
+
+La seguridad de sesión y autenticación exige controles sólidos tanto en almacenamiento, transporte y expiración como en los factores utilizados. Regeneración de sesión, expiración estricta, MFA y mecanismos modernos como FIDO2 reducen significativamente la superficie de ataque y mitigan las amenazas más comunes.
