@@ -1,0 +1,210 @@
+# Gestión de riesgo en ciberseguridad 
+
+## Resumen rápido
+
+Gestión de riesgo en ciberseguridad = identificar qué tiene valor (activos), qué puede dañarlo (amenazas), qué debilidades permiten ese daño (vulnerabilidades), cuantificar la **probabilidad × impacto**, y decidir un **tratamiento** (aceptar, mitigar, transferir, evitar). Luego controlar, monitorear y revisar. Esta entrada detalla conceptos, fórmulas, ejemplos prácticos, flujo conceptual, métricas y mapeo a estándares clave.
+
+---
+
+# Conceptos clave y definiciones
+
+### Activo
+
+Cualquier recurso con valor para la organización: datos, servidores, cuentas, aplicaciones, personas, procesos, reputación.
+
+### Amenaza
+
+Evento o agente capaz de causar daño: atacante externo, error humano, fallo físico, desastre natural, proveedor comprometido.
+
+### Vulnerabilidad
+
+Debilidad explotable por una amenaza: software sin parchear, credenciales débiles, mala configuración, procesos inseguros.
+
+### Riesgo (fórmula)
+
+Versión básica y usada a nivel operativo:
+
+```
+Riesgo = Probabilidad × Impacto
+```
+
+Versión ampliada usada en muchos marcos:
+
+```
+Riesgo = Amenaza × Vulnerabilidad × Valor_del_activo
+```
+
+(“Probabilidad” refleja la presencia de la amenaza y la explotabilidad; “Impacto” refleja valor/daño potencial).
+
+### Mitigación / Control
+
+Cualquier acción para reducir probabilidad, impacto o ambos: controles técnicos (firewalls, MFA), administrativos (políticas, formación) y físicos (acceso físico, CCTV).
+
+### Tratamiento del riesgo
+
+Estrategias: **aceptar**, **mitigar**, **transferir** (seguros/contratos), **evitar** (eliminar la actividad que genera el riesgo).
+
+---
+
+# Proceso y flujo conceptual (paso a paso)
+
+1. **Contexto y criterios**: definir alcance, activos críticos, niveles de aceptación de riesgo y criterios de decisión.
+2. **Identificación de activos**: inventario y valoración (cualitativa o cuantitativa).
+3. **Identificación de amenazas y vulnerabilidades**: threat modelling, pentests, escaneos, revisión de configuraciones.
+4. **Análisis de riesgo**: estimar probabilidad e impacto; elegir método (cuantitativo, cualitativo, híbrido).
+5. **Evaluación y clasificación**: matriz de riesgo (Bajo/Medio/Alto) o scoring numérico; priorizar.
+6. **Tratamiento**: seleccionar controles y plan de remediación.
+7. **Implementación**: cambios técnicos, procesos, contratos.
+8. **Monitoreo y revisión continua**: indicadores, métricas, reassessment periódicos.
+
+Diagrama textual rápido:
+`Contexto → Inventario → Amenazas/Vulns → Análisis (P×I) → Clasificación → Tratamiento → Implementación → Monitoreo`
+
+---
+
+# Métodos de análisis (con ejemplos prácticos)
+
+## 1) Método cualitativo (matriz)
+
+* Probabilidad: Baja / Media / Alta
+* Impacto: Bajo / Medio / Alto
+  Ejemplo: API interna sin autenticación en entorno de pruebas accesible desde internet
+* Probabilidad: Alta
+* Impacto: Medio-Alto (exposición de datos de prueba, posible escalada)
+* Resultado: Riesgo = Alto → Mitigar (restringir acceso, aplicar autenticación)
+
+## 2) Método cuantitativo (ejemplo numérico)
+
+Asigna valores numéricos:
+
+* Probabilidad anual estimada (p) = 0.2 (20% por año)
+* Impacto (monetario) = USD 120,000
+  Riesgo anual esperado = p × Impacto = 0.2 × 120,000 = USD 24,000/año
+  Decisión: si coste de control (p. ej. WAF + reglas = USD 8,000/año) < reducción de riesgo esperado, implementar control.
+
+## 3) Método híbrido (scoring)
+
+* Amenaza (1–5), Vulnerabilidad (1–5), Valor_activo (1–5)
+* Score = Amenaza × Vulnerabilidad × Valor_activo (máx 125)
+  Ejemplo: Amenaza=4, Vulnerabilidad=3, Valor=5 → Score=60 → categoría: Alto → priorizar.
+
+---
+
+# Ejemplo práctico completo: riesgo de exfiltración por cuenta comprometida
+
+1. Activo: base de datos de clientes (PII) — valor: Alto.
+2. Amenaza: atacante externo con credenciales robadas.
+3. Vulnerabilidades: contraseñas sin MFA + acceso remoto mal limitado.
+4. Probabilidad: Media-Alta. Impacto: Muy Alto (multas, reputación).
+5. Riesgo: Alto.
+6. Tratamiento propuesto:
+
+   * Implementar MFA en cuentas administrativas (mitiga probabilidad).
+   * Restringir accesos por IP / VPN (mitiga probabilidad).
+   * Monitorización de exfiltración (detección rápida — reduce impacto).
+   * Backups cifrados y plan de respuesta (reduce impacto/recuperación).
+7. Métrica de aceptación: si después de controles el score baja a Medium o menor, mantener; sino, considerar transferencia (seguro/cyber insurance) o evitar (descontinuar servicio).
+
+---
+
+# Plantilla mínima de registro de riesgos (risk register)
+
+|    ID | Activo      | Amenaza           | Vulnerabilidad | Prob. |  Impacto |  Score |   Tratamiento   | Responsable |    Estado   |
+| ----: | :---------- | :---------------- | :------------: | :---: | :------: | :----: | :-------------: | :---------: | :---------: |
+| R-001 | DB Clientes | Credentials theft |     No MFA     |  Alta | Muy Alto | 4×5=20 | MFA + monitoreo |    SecOps   | En progreso |
+
+(Adaptar columnas a necesidades: coste estimado, fecha objetivo, evidencia de mitigación.)
+
+---
+
+# Clasificación y priorización
+
+* Usa **matrices** o **scores** para priorizar.
+* Establece **SLA** y **SLR** (tiempo de remediación) según criticidad.
+* No mezcles activos críticos con no-críticos al priorizar: segmenta por impacto corporativo.
+
+---
+
+# Tratamiento y controles tácticos (ejemplos)
+
+* **Reducción de probabilidad**: MFA, least privilege, segmented network, WAF, secure CI/CD.
+* **Reducción de impacto**: cifrado at-rest/in-transit, backup, DLP.
+* **Transferencia**: pólizas de ciberseguro, cláusulas contractuales con proveedores.
+* **Aceptación**: riesgo residual pequeño y costo de mitigación desproporcionado.
+* **Evitar**: eliminar servicio/funcionalidad que genera riesgo inaceptable.
+
+---
+
+# Métricas y KPIs útiles
+
+* % de activos con valoración completada.
+* % de vulnerabilidades críticas parcheadas en 30 días.
+* Número de riesgos con plan de tratamiento activo.
+* Reducción del score medio por trimestre.
+* Tiempo medio de remediación (MTTR) para controles críticos.
+
+---
+
+# Estándares clave y cómo aplicarlos (resumen y mapeo)
+
+* **ISO/IEC 27001** — establece requisitos para un ISMS; obliga a demostrar control y mejora continua. ([ISO][1])
+* **ISO/IEC 27005** — guía específica para gestión de riesgos en información; adapta ISO 31000 al contexto de seguridad. Útil para diseñar el ciclo de evaluación y tratamiento. ([ISO][2])
+* **NIST SP 800-30 / SP 800-30r1** — guía práctica para realizar evaluaciones de riesgo (preparar, conducir, comunicar, mantener). Muy utilizada en entornos públicos y privados que requieren rigor metodológico. ([NIST CSRC][3])
+* **NIST Cybersecurity Framework (CSF)** — funciones: Identify, Protect, Detect, Respond, Recover; útil para mapear controles y priorizar capacidades operacionales. CSF 2.0 añade Govern y reorganiza categorías. ([NIST][4])
+
+**Consejo práctico:** diseña tu proceso alineado a uno o dos marcos (por ejemplo ISO27001 + ISO27005 para cumplimiento; NIST CSF + SP800-30 para madurez operacional), y documenta cómo cada control mapea a los requisitos/funciones.
+
+---
+
+# Integración técnica con workflows de DevOps / SRE
+
+* Integrar escaneo de dependencias en CI (reducir vulnerabilidades antes de despliegue).
+* Shift-left: threat modelling y revisión de arquitectura en diseño de features.
+* Pipelines deben generar artefactos para el registro de riesgos (evidence).
+* Implementar guardrails automáticos (policy-as-code) para bloquear despliegues inseguros.
+
+---
+
+# Ejemplo de checklist rápido para una evaluación inicial (30–90 min)
+
+1. Inventario rápido de activos críticos.
+2. Identificar 3 amenazas top (phishing, credentials, supply chain).
+3. Buscar 3 vulnerabilidades prioritarias (sin MFA, software sin parchear, exposiciones públicas).
+4. Calcular riesgo con matriz simple.
+5. Crear 3 tickets de mitigación inmediatos (MFA, parche, regla firewall).
+6. Establecer responsable y fecha de cierre.
+
+---
+
+# Errores comunes y cómo evitarlos
+
+* Medir solo vulnerabilidades técnicas y olvidar procesos/personas.
+* No definir criterios de aceptación de riesgo.
+* Falta de actualización periódica: riesgo es dinámico.
+* Sobrecargar con métricas irrelevantes; priorizar lo que impacta al negocio.
+* No mapear controles a obligaciones legales/regulatorias (GDPR, PCI, local).
+
+---
+
+# Resumen ejecutivo de acciones inmediatas
+
+1. Definir alcance mínimo del ISMS y criterios de riesgo.
+2. Hacer inventario rápido de activos.
+3. Ejecutar evaluación express (matriz) en activos top-10.
+4. Implementar mitigaciones de alto impacto/ bajo coste (MFA, parcheo, segmentación).
+5. Formalizar risk register y ciclo de revisión mensual.
+
+---
+
+Fuentes y referencias (lectura recomendada):
+
+* ISO/IEC 27001 — descripción del estándar ISMS. ([ISO][1])
+* ISO/IEC 27005 — guía de gestión de riesgos en seguridad de la información. ([ISO][2])
+* NIST SP 800-30 / Rev.1 — guía para realizar evaluaciones de riesgo. ([NIST CSRC][3])
+* NIST Cybersecurity Framework (CSF) — funciones y estructura (CSF 2.0 actualizada). ([NIST][5])
+
+[1]: https://www.iso.org/standard/27001?utm_source=chatgpt.com "ISO/IEC 27001:2022 - Information security management ..."
+[2]: https://www.iso.org/standard/80585.html?utm_source=chatgpt.com "ISO/IEC 27005:2022 - Guidance on managing information ..."
+[3]: https://csrc.nist.gov/pubs/sp/800/30/r1/final?utm_source=chatgpt.com "SP 800-30 Rev. 1, Guide for Conducting Risk Assessments"
+[4]: https://www.nist.gov/cyberframework/getting-started/online-learning/five-functions?utm_source=chatgpt.com "The CSF 1.1 Five Functions | NIST"
+[5]: https://www.nist.gov/cyberframework?utm_source=chatgpt.com "Cybersecurity Framework | NIST"
