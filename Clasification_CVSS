@@ -1,0 +1,244 @@
+# Clasificación CVSS y gestión integral de vulnerabilidades — guía técnica para Hashnode
+
+## Introducción
+
+CVSS es el estándar dominante para cuantificar la severidad técnica de una vulnerabilidad. Su propósito: producir un puntaje consistente y comparable que permita priorizar remediación. Esta entrada detalla las métricas base, temporales y ambientales, explica modelos obsoletos, enlaza el proceso de clasificación de datos, resume mitigación y controles preventivos y finaliza con un mapeo directo de vulnerabilidades a riesgos de negocio.
+
+---
+
+# CVSS: estructura y principios
+
+CVSS se compone de tres grupos de métricas:
+
+1. **Base** — características intrínsecas de la vulnerabilidad.
+2. **Temporales** — factores que cambian con el tiempo (exploit disponible, parches).
+3. **Ambientales** — factores específicos del entorno donde vive el activo afectado.
+
+El resultado final es un puntaje (0.0–10.0) y una severidad categórica (None, Low, Medium, High, Critical).
+
+---
+
+# Métricas Base (Base Metrics)
+
+Miden la naturaleza de la vulnerabilidad sin considerar tiempo ni entorno. Incluyen:
+
+### Attack Vector (AV)
+
+* Network (N)
+* Adjacent (A)
+* Local (L)
+* Physical (P)
+
+Ejemplo: RCE en servicio expuesto vía HTTP → AV=N.
+
+### Attack Complexity (AC)
+
+* Low (L)
+* High (H)
+  Ejemplo: buffer overflow explotable sin condiciones especiales → AC=L.
+
+### Privileges Required (PR)
+
+* None (N)
+* Low (L)
+* High (H)
+
+Ejemplo: SQLi explotable sin autenticación → PR=N.
+
+### User Interaction (UI)
+
+* None (N)
+* Required (R)
+
+Ejemplo: ataque XSS que exige que un usuario visite un enlace → UI=R.
+
+### Scope (S)
+
+* Unchanged (U)
+* Changed (C)
+
+Ejemplo: vulnerabilidad que permite escapar del contenedor al host → S=C.
+
+### Impact Metrics (CIA)
+
+* Confidentiality (C): None/Low/High
+* Integrity (I): None/Low/High
+* Availability (A): None/Low/High
+
+Ejemplo: deserialización insegura → C=H, I=H, A=H.
+
+**Resultado típico ejemplo:**
+RCE en servidor web sin autenticación
+AV=N, AC=L, PR=N, UI=N, S=U, C=H, I=H, A=H
+Puntaje aproximado: 9.8 (Critical).
+
+---
+
+# Métricas Temporales (Temporal Metrics)
+
+Influyen según estado de la vulnerabilidad en el ciclo de divulgación:
+
+### Exploit Code Maturity (E)
+
+* Not Defined, Unproven, Proof-of-Concept, Functional, High
+
+Ejemplo: exploit público funcional → E=Functional.
+
+### Remediation Level (RL)
+
+* Official Fix, Temporary Fix, Workaround, Unavailable
+
+Ejemplo: no existen parches → RL=Unavailable.
+
+### Report Confidence (RC)
+
+* Unknown, Reasonable, Confirmed
+
+Ejemplo: vulnerabilidad confirmada por proveedor → RC=Confirmed.
+
+**Efecto práctico:** si aparece un exploit público, el puntaje aumentará; si sale un parche oficial, el puntaje disminuirá.
+
+---
+
+# Métricas Ambientales (Environmental Metrics)
+
+Ajustan el puntaje según el contexto del activo y el negocio.
+
+### Security Requirements (CR, IR, AR)
+
+Importancia de confidencialidad, integridad y disponibilidad para la organización:
+
+* Low, Medium, High
+
+Ejemplo: base de datos de pacientes → CR=H, IR=H, AR=H.
+
+### Modificadores de Métricas Base
+
+Permiten ajustar AV, AC, PR, UI, C, I, A según el entorno específico.
+
+Ejemplo: una vulnerabilidad con AV=Local podría elevarse si los usuarios tienen acceso físico amplio a los dispositivos afectados.
+
+**Resultado:** un CVSS 7.5 genérico puede volverse 9.0 en un entorno de alta criticidad o bajar a 6.0 en uno aislado sin impacto al negocio.
+
+---
+
+# Modelos de clasificación obsoletos
+
+### CVSS v2 (obsoleto en operación industrial moderna)
+
+Problemas frecuentes:
+
+* Peso excesivo en el vector de acceso.
+* Falta de distinción clara entre interacción humana y privilegios requeridos.
+* Gran cantidad de falsos positivos de severidad alta.
+* Incapacidad para diferenciar correctamente cambios de alcance.
+
+Razón de obsolescencia: incapacidad para priorizar adecuadamente en entornos modernos orientados a microservicios, supply chain y cloud.
+
+### Clasificaciones ad-hoc internas
+
+* Modelos basados solo en “crítico, alto, medio, bajo” sin fórmula.
+* Matrices estáticas sin impacto real en activos críticos.
+* Puntuaciones sin considerar exploitabilidad real.
+
+Obsolescencia por falta de repetibilidad, auditabilidad y capacidad de automatización.
+
+---
+
+# Proceso de clasificación de datos para vincular impacto
+
+El puntaje CVSS se vuelve significativo solo si se entiende el valor del activo afectado. El proceso:
+
+1. **Inventario de activos.**
+2. **Clasificación de datos:** público, interno, confidencial, regulado.
+3. **Asignación de requisitos de seguridad (CR/IR/AR).**
+4. **Asociación de vulnerabilidades a activos.**
+5. **Cálculo de CVSS ambiental ajustado.**
+
+Ejemplo:
+
+* Vulnerabilidad de LFI en servidor con logs internos → CVSS Base=7.2.
+* Activo contiene datos regulados por PCI → CR=H, IR=H.
+  Resultado ambiental final: severidad ajustada a rango crítico.
+
+---
+
+# Mitigación de riesgos basada en CVSS
+
+El puntaje CVSS se usa para ordenar la remediación. Alineación típica:
+
+* **Critical (9.0–10.0)** → corrección inmediata; SLA < 48h.
+* **High (7.0–8.9)** → corrección rápida; SLA < 7 días.
+* **Medium (4.0–6.9)** → corrección programada; SLA < 30 días.
+* **Low (0–3.9)** → corrección opcional o diferida.
+
+Enfoque:
+
+* Reducir probabilidad (controles preventivos).
+* Reducir impacto (controles compensatorios).
+* Transferir o aceptar el riesgo si la mitigación es inviable.
+
+---
+
+# Controles preventivos (técnicos y administrativos)
+
+### Técnicos
+
+* MFA obligatorio.
+* Hardening de servidores.
+* Parches automatizados.
+* WAF con firmas activas.
+* Segmentación de red.
+* TLS estricto.
+* Validación de entradas y sanitización.
+* Escaneo automatizado SAST/DAST y análisis de dependencias.
+
+### Administrativos
+
+* Políticas de ciclo de vida de software.
+* Gestión de activos y CMDB.
+* Reglas de revisión de código.
+* Entrenamiento contra phishing.
+* Procedimientos de respuesta a incidentes.
+
+---
+
+# Mapeo de vulnerabilidades a riesgos de negocio
+
+El vínculo crítico: “una vulnerabilidad técnica solo importa si afecta un proceso de negocio”.
+
+### Pasos de mapeo
+
+1. Identificar proceso del negocio afectado.
+2. Determinar impacto sobre datos críticos.
+3. Estimar pérdidas potenciales (operativas, regulatorias, reputacionales).
+4. Traducir el puntaje CVSS en probabilidad técnica.
+5. Convertir la combinación impacto × probabilidad en riesgo del negocio.
+
+### Ejemplo: RCE en API financiera
+
+* CVSS Base: 9.8.
+* Proceso afectado: movimiento de fondos.
+* Impacto: fraude, daño reputacional, sanciones regulatorias.
+* Riesgo de negocio: crítico.
+* Controles: WAF, autenticación fuerte, segmentación, rotación de secretos, monitoreo en tiempo real.
+
+### Ejemplo: XSS en portal interno de soporte
+
+* CVSS Base: 6.1.
+* Impacto: robo de sesión interna, fuga limitada de datos.
+* Riesgo de negocio: medio.
+* Tratamiento: parche, sanitización, CSP.
+
+### Ejemplo: DoS en sistema fuera de línea
+
+* CVSS Base: 7.5.
+* Activo no crítico y aislado.
+* Riesgo de negocio: bajo.
+* Tratamiento: aceptación o mitigación mínima.
+
+---
+
+# Conclusión técnica
+
+CVSS no es una herramienta de decisión final; su función es cuantificar severidad técnica. La prioridad real surge al integrarlo con clasificación de datos, criticidad del activo, impacto regulatorio y continuidad del negocio. La gestión efectiva exige utilizar CVSS como insumo, no como resultado.
