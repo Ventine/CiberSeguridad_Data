@@ -1,0 +1,142 @@
+# Consulta de fuentes reconocidas para gestión de vulnerabilidades (blog técnico — Hashnode)
+
+## Introducción
+
+Definición operacional: “consulta de fuentes reconocidas” = búsqueda y consumo sistemático de repositorios, bases de datos y canales oficiales que publican vulnerabilidades, indicadores y guías de mitigación para alimentar detección, priorización y respuesta. Objetivo: transformar datos públicos en decisiones de mitigación accionables.
+
+## Fuentes primarias y su papel
+
+* **CVE (Common Vulnerabilities and Exposures)** — identificador único y referencia canónica para divulgaciones públicas. Sirve como índice global para correlacionar hallazgos. ([CVE][1])
+* **NVD (National Vulnerability Database) / CVSS** — añade métricas (CVSS), descripciones extendidas, referencias y calculadoras de severidad; útil para cálculos de riesgo base y refinamientos ambientales. ([NVD][2])
+* **OWASP (Top 10, proyectos)** — para vulnerabilidades de aplicaciones web y prácticas de mitigación; guía de control y verificación en desarrollo seguro. ([OWASP][3])
+* **EPSS (Exploit Prediction Scoring System)** — probabilidad de explotación en el corto plazo; complementa CVSS para priorizar parcheo en función de explotación real. ([FIRST][4])
+* **CERT / CSIRT / CIRT** — equipos/organizaciones que emiten alertas, playbooks y coordinación de respuesta a incidentes; imprescindibles para inteligencia operacional y notificaciones sectoriales. ([TechTarget][5])
+
+## Fuentes prácticas para identificar vulnerabilidades
+
+1. **Bases oficiales**
+
+   * CVE (cve.org): buscar por identificador CVE, correlacionar referencias. ([CVE][1])
+   * NVD (nvd.nist.gov): obtener CVSS, descripciones ampliadas y enlaces a parches. ([NVD][2])
+2. **Feeds de fabricantes / proveedores**
+
+   * Microsoft MSRC, Cisco Security Advisories, Adobe Security Bulletins: avisos de parche, pasos de mitigación y boletines mensuales. Ejemplo: suscribirse a los RSS/JSON del MSRC para descargar avisos programáticamente. ([Microsoft Learn][6])
+3. **Centros de respuesta y autoridades**
+
+   * CSIRTs nacionales, CERTs sectoriales y CISA (catálogos como KEV — Known Exploited Vulnerabilities) para priorizar rápidamente vulnerabilidades explotadas en la naturaleza. ([TechTarget][5])
+4. **Plataformas de inteligencia y repositorios enriquecidos**
+
+   * EPSS, Vuln DBs comerciales y agregadores (p. ej. CVE Details, vendor feeds, plataformas de threat intel). ([CVE Details][7])
+5. **Comunidades y proyectos sectoriales**
+
+   * OWASP, listas de correo de proyectos OSS, repositorios de exploits (con control legal/ético para investigación). ([OWASP][3])
+
+## Ejemplos de consultas técnicas (práctico)
+
+* Buscar un CVE por ID (ejemplo de endpoint NVD):
+
+```bash
+curl -s "https://services.nvd.nist.gov/rest/json/cve/1.0/CVE-2021-44228" | jq .
+```
+
+* Agregar un feed de MSRC (ejemplo conceptual):
+
+```bash
+curl -s "https://api.msrc.microsoft.com/cvrf/v2.0/..." -H "Accept: application/json"
+```
+
+* Calcular prioridad combinada (ejemplo conceptual):
+
+```
+priority_score = 0.5 * (CVSS_base / 10) + 0.3 * EPSS_probability + 0.2 * asset_criticality
+```
+
+(usar normalización y umbrales por SLA operacional).
+
+## Fuentes de alerta y respuesta (operacional)
+
+* **CERTs y CSIRTs**: divulgaciones, TTPs, IOCs y coordinación de respuesta. Integrar sus feeds en SOAR/SIEM para alertas automáticas. ([TechTarget][5])
+* **Vendor advisories**: instrucciones de parche y mitigación; priorizar cuando el proveedor publica mitigación oficial. ([Microsoft Learn][6])
+* **Agregadores y boletas de amenazas**: EPSS, CISA KEV, listas de explotación pública para ajustar urgencia. ([FIRST][4])
+
+## Análisis de datos aplicado a vulnerabilidades
+
+1. **Ingesta y normalización**
+
+   * Normalizar campos: CVE ID, CVSS, EPSS, fecha de divulgación, vectores de ataque, productos afectados, parches disponibles, exploit público.
+2. **Enriquecimiento**
+
+   * Añadir: topología del activo, etiquetas de criticidad, historial de incidentes, exposición externa (servicios publicados), inventario de versiones.
+3. **Correlación**
+
+   * Match entre IOCs de threat intel y logs internos; correlación entre CVEs y activos afectados.
+4. **Modelado / scoring**
+
+   * Combinar métricas: CVSS (impacto técnico), EPSS (probabilidad de explotación), criticidad del activo y contexto operativo para producir priorizaciones accionables.
+5. **Trazabilidad**
+
+   * Registrar cambios de estado (vulnerabilidad detectada → validada → mitigada → parcheada) con timestamps y responsables.
+
+## Fuentes de proveedor y fabricante (por qué importan)
+
+* Los **vendors** publican parches, mitigaciones temporales y CVRF/CVRF que a menudo incluyen pasos de mitigación directa: consumir estos feeds reduce window of exposure y evita mitigar con medidas ineficaces. Ejemplos: MSRC (Microsoft), Cisco, Adobe. ([Microsoft Learn][6])
+
+## Criterios para identificación y priorización (lista accionable)
+
+Orden de evaluación para cada vulnerabilidad descubierta:
+
+1. **Confirmación técnica**: ¿afecta versión instalada? (fingerprinting / asset inventory)
+2. **Disponibilidad de exploit público**: exploit público o PoC disponible → subir prioridad.
+3. **EPSS / evidencia de explotación**: EPSS alto o reportes de explotación en la naturaleza → prioridad alta. ([FIRST][4])
+4. **CVSS base y vector**: usa CVSS como indicador técnico, no como única métrica. ([NVD][2])
+5. **Criticidad del activo**: impacto en negocio, datos sensibles, continuidad operativa.
+6. **Exposición**: servicio público/Internet-facing = mayor riesgo.
+7. **Mitigación y parche disponibles**: parche probado y desplegable → planear ventana de mantenimiento.
+8. **Dependencias y cadena de suministro**: vulnerabilidades en componentes OSS o proveedores críticos → evaluar alcance.
+9. **Ventana de exposición (tempo)**: fecha de divulgación vs. fecha de parche; si hay explotación activa, acelerar.
+10. **Costo y esfuerzo de mitigación**: esfuerzo operativo, posibles regresiones; priorizar mitigaciones de menor impacto con alto riesgo mitigado.
+
+## Ejemplo de playbook resumido (operacional)
+
+1. Ingesta automática de feeds (CVE, NVD, EPSS, vendor advisories, CERT).
+2. Enriquecimiento contra CMDB/IT inventory.
+3. Regla de priorización:
+
+   * Si EPSS > 0.6 o exploit público y activo expuesto → crear ticket P0.
+   * Si CVSS ≥ 9.0 y activo crítico → P1 si no hay exploit; P0 si exploit conocido.
+4. Mitigación temporal si parche no disponible (WAF rule, bloqueo IP, segmentación).
+5. Validación post-mitigación y cierre.
+
+## Buenas prácticas de integración
+
+* Automatizar ingest/normalización y alertas a SOAR/SIEM.
+* Mantener inventario de activos y versiones sincronizado con detecciones.
+* Usar múltiples fuentes: CVE/NVD para identificación; EPSS/CISA/CERT para urgencia; vendor advisories para mitigación. ([CVE][1])
+
+## Riesgos y limitaciones
+
+* **Latencia de scoring**: NVD/CVSS pueden tardar en publicar o corregir scores — combinar con EPSS y datos de explotación real. ([NVD][2])
+* **Falsos positivos/negativos**: no todas las CVEs son relevantes para todos los entornos; validar con inventario.
+* **Dependencia de proveedores**: retrasos en advisories pueden afectar tiempos de respuesta; mantener canales alternativos.
+
+## Resumen rápido (cheat-sheet)
+
+* Consumir: CVE (identificador), NVD (CVSS, detalles), EPSS (probabilidad de explotación), OWASP (guías web), vendor advisories (parches), CERT/CSIRT (alertas). ([CVE][1])
+* Priorizar por: explotación activa, EPSS, criticidad del activo, exposición y disponibilidad de parche.
+* Automatizar ingest, enriquecer con CMDB, correlacionar con logs, ejecutar playbooks de mitigación.
+
+# Referencias seleccionadas
+
+* CVE Program — cve.org. ([CVE][1])
+* NVD — métricas y CVSS. ([NVD][2])
+* OWASP Top 10. ([OWASP][3])
+* EPSS — FIRST. ([FIRST][4])
+* Diferencias CERT/CSIRT (roles y ejemplos). ([TechTarget][5])
+
+[1]: https://www.cve.org/?utm_source=chatgpt.com "CVE: Common Vulnerabilities and Exposures"
+[2]: https://nvd.nist.gov/vuln-metrics/cvss?utm_source=chatgpt.com "Vulnerability Metrics - NVD"
+[3]: https://owasp.org/www-project-top-ten/?utm_source=chatgpt.com "OWASP Top Ten"
+[4]: https://www.first.org/epss/?utm_source=chatgpt.com "Exploit Prediction Scoring System (EPSS)"
+[5]: https://www.techtarget.com/searchsecurity/tip/CERT-vs-CSIRT-vs-SOC-Whats-the-difference?utm_source=chatgpt.com "CERT vs. CSIRT vs. SOC: What's the Difference?"
+[6]: https://learn.microsoft.com/en-us/security-updates/?utm_source=chatgpt.com "Security Advisories and Bulletins"
+[7]: https://www.cvedetails.com/?utm_source=chatgpt.com "CVE security vulnerability database. Security vulnerabilities ..."
