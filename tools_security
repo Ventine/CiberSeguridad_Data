@@ -1,0 +1,134 @@
+Título: Marco técnico para entender las herramientas y prácticas del análisis y prueba de seguridad
+
+---
+
+## Definición operativa
+
+Un entorno de prueba de seguridad exige control del flujo de datos, inspección del tráfico, ejecución controlada de exploits y documentación precisa. El objetivo es medir exposición real, no dramatizar amenazas.
+
+---
+
+## Proxies de interceptación
+
+Instrumentos para descomponer el tráfico HTTP/HTTPS, alterar peticiones y observar respuestas del servidor en tiempo real.
+
+### Burp Suite
+
+Arquitectura modular. Destaca:
+
+* **Proxy**: Intercepción y modificación de solicitudes.
+* **Repeater**: Reenvío manual para validar suposiciones.
+* **Intruder**: Automatización de ataques basados en posiciones y diccionarios.
+* **Scanner (Pro)**: Identificación de vulnerabilidades comunes.
+
+**Ejemplo breve**:
+Se intercepta una petición POST de login. Se altera el campo `role=user` a `role=admin`. Repeater confirma si el backend valida o solo confía en el cliente. Resultado: exposición inmediata al escalamiento horizontal o vertical.
+
+### OWASP ZAP
+
+Alternativa abierta. Útil en auditorías rápidas o para estudiantes con limitaciones de software propietario.
+
+* **Spider/Crawl**: Enumeración de rutas.
+* **Active Scan**: Ejecución de pruebas sobre superficie detectada.
+* **Contextos**: Control de alcance y autenticación.
+
+**Ejemplo**:
+Definir un contexto con autenticación basada en cookie. Ejecutar Active Scan contra rutas administrativas para validar controles de autorización.
+
+---
+
+## Escáneres de vulnerabilidades
+
+Instrumentos para descubrimiento sistemático.
+
+### Nessus Profesional
+
+Basado en políticas. Recomendable para:
+
+* Configuración incorrecta en servidores.
+* Versiones vulnerables de servicios.
+* Pruebas de cumplimiento.
+
+**Ejemplo**:
+Escaneo de un servidor Windows olvidado en una subred interna. Nessus detecta SMBv1 habilitado, versiones sin parche y enumeración anónima. Resultado: alto riesgo de movimiento lateral.
+
+---
+
+## Marcos de explotación
+
+### Metasploit Framework
+
+Colección de exploits, payloads, encoders y módulos de post-explotación.
+
+* **Auxiliary**: Escaneos, enumeración.
+* **Exploit**: Ejecución contra servicios vulnerables.
+* **Post**: Recolección de credenciales, movimiento lateral, pivoteo.
+
+**Ejemplo**:
+Un servicio Apache Struts sin parche. Se identifica el CVE correspondiente. Se usa `exploit/multi/http/struts2_content_type_ognl`. Al ejecutar, se obtiene una sesión Meterpreter. Se emplea `hashdump` para obtener credenciales.
+
+---
+
+## Hacking ético
+
+Disciplina operativa orientada a identificar vulnerabilidades sin causar daño, dentro de un marco acordado. No depende de estética ni de estilos; depende de precisión técnica.
+
+---
+
+## Clasificación operativa de actores
+
+* **Grey Hat**: Técnicamente competente, viola permisos, pero sin intención maliciosa directa. Suele generar problemas legales por falta de autorización.
+* **Black Hat**: Motivo ilícito, financiero o destructivo.
+* **White Hat**: Actúa con autorización explícita y reporta según reglas.
+
+---
+
+## Pentesting
+
+Proceso estructurado:
+
+1. Reconocimiento pasivo.
+2. Análisis activo.
+3. Explotación controlada.
+4. Post-explotación limitada.
+5. Evidencias y reportes reproducibles.
+
+**Ejemplo**:
+En un pentest de red interna, se detectan equipos con puertos administrativos expuestos. Se realiza un brute-force controlado contra SSH solo si el alcance autorizado lo incluye. Explotación mínima para demostrar riesgo sin comprometer estabilidad.
+
+---
+
+## Scope of Work (SoW)
+
+Documento que elimina ambigüedades. Define:
+
+* Rangos de IP.
+* Horarios.
+* Técnicas permitidas.
+* Restricciones absolutas.
+* Puntos de contacto.
+* Criterios de éxito.
+
+Un SoW sólido evita responsabilidad innecesaria y garantiza trazabilidad.
+
+---
+
+## Legislación y límites
+
+Las leyes varían por jurisdicción, pero convergen en lo esencial: acceso no autorizado es delito incluso si la intención no es dañina. La autorización explícita protege al analista; la suposición no.
+
+---
+
+## Responsabilidad de divulgación
+
+Proceso para informar vulnerabilidades de forma responsable.
+Etapas:
+
+1. Notificación al propietario.
+2. Espera razonable para corrección.
+3. Publicación técnica solo después de parche o acuerdo.
+4. Evitar divulgación prematura que habilite explotación real.
+
+---
+
+Este marco ofrece la estructura fundamental para un artículo técnico en Hashnode sin depender de ornamentación innecesaria.
