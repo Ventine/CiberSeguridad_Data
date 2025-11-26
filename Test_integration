@@ -1,0 +1,364 @@
+# Integración de pruebas y seguridad en el ciclo de desarrollo — guía técnica, ejemplos y controles prácticos
+
+## Resumen ejecutivo
+
+Integrar pruebas funcionales y de seguridad dentro del ciclo de vida de desarrollo (SDLC) no es opcional: es la única forma de reducir riesgo de explotación, reducir coste de remediación y habilitar despliegues continuos seguros. Esta guía presenta un workflow práctico, metodologías, técnicas y ejemplos de código/escenarios para cubrir desde SAST/DAST hasta RASP, IaC, hardening, prevención de inyección SQL, principios de codificación segura y auditoría forense.
+
+---
+
+# 1. Qué es “integración de pruebas” y metodologías asociadas
+
+Integración de pruebas = ejecutar verificación (funcional, integración, seguridad, configuración) de forma continua y automatizada en cada etapa del SDLC para detectar fallas antes de producción.
+
+Metodologías relevantes:
+
+* CI/CD + Shift-Left: ejecutar pruebas de seguridad lo más temprano posible (pre-commit, build).
+* Test Pyramid: unit → integration → e2e; añadir seguridad en cada capa (SAST en unit/build, DAST en staging, pentest en preprod).
+* DevSecOps: equipo responsable de seguridad integrado en pipelines y herramientas (SCA, SAST, IaC scanning).
+
+Implementación mínima:
+
+* Pre-commit hooks: lint, bandit/semgrep rápido.
+* Pipeline CI: SAST (fast rules) → unit tests → build → IaC scan → DAST/compose integration tests → gate.
+* Canary/blue-green + runtime monitoring (RASP/WAF/EDR) en producción.
+
+---
+
+# 2. Ciclo de desarrollo y metodología de pruebas integrada (práctica)
+
+Pipeline ejemplo (GitHub Actions / GitLab CI):
+
+1. Pre-commit: format, static analyzers locales.
+2. Pull Request: ejecutar unit tests, linters, semgrep/bandit (SAST lightweight).
+3. Merge → Build artifact: ejecutar SCA (software composition analysis) y SAST completo; bloquear si hay findings de alta severidad.
+4. Deploy a staging: ejecutar IaC scan (tfsec/checkov), configuración hardening automated (Ansible hardening playbook dry-run).
+5. DAST (ZAP/OWASP ZAP automation) en staging; fuzzing de endpoints críticos.
+6. Pentest programado + bug bounty para release mayor.
+7. Producción: monitorización, RASP, logging centralizado, EDR.
+
+Pipeline YAML (resumen conceptual):
+
+```yaml
+stages: [precommit, test, build, iac_scan, dast, deploy, monitor]
+precommit:
+  script: [pre-commit run --all-files]
+sast:
+  script: [semgrep --config=rules/ --output=report.json]
+iac_scan:
+  script: [tfsec . || exit 1]
+dast:
+  script: [zap-baseline.py -t https://staging.example -r zap.html]
+```
+
+---
+
+# 3. Integración de seguridad automática
+
+Elementos automáticos mínimos:
+
+* Gate en CI que falle si SAST/SCA detecta vulnerabilidades CVSS≥7 o reglas OWASP críticas.
+* IaC policies como code (policy-as-code) usando Open Policy Agent/Conftest para rechazar cambios de permisos excesivos.
+* Secret scanning en commits (truffleHog, git-secrets).
+* Dependabot/Snyk automáticos para parches de dependencias.
+
+Ejemplo de regla OPA para negar AWS IAM con `*` en Action:
+
+```rego
+package iam
+
+deny[msg] {
+  input.action == "iam:PutRolePolicy"
+  input.policy.Statement[_].Action == "*"
+  msg = "No permitido: acción '*' en política IAM"
+}
+```
+
+---
+
+# 4. Inyección SQL — explicación y ejemplos mitigados
+
+Patrón de vulnerabilidad (NO usar):
+
+```sql
+-- vulnerable
+query = "SELECT * FROM users WHERE email = '" + user_input + "'"
+```
+
+Payload simple que explota:
+
+```
+' OR '1'='1' --
+```
+
+Mitigación por preparación/parametrización (ejemplo Python + psycopg2):
+
+```python
+cur.execute("SELECT * FROM users WHERE email = %s", (user_input,))
+```
+
+Ejemplo Java (PreparedStatement):
+
+```java
+PreparedStatement ps = conn.prepareStatement(
+  "SELECT id, name FROM users WHERE email = ?");
+ps.setString(1, userInput);
+ResultSet rs = ps.executeQuery();
+```
+
+Prácticas adicionales:
+
+* Validación y saneamiento de entrada (allowlist).
+* Escapar de metacaracteres sólo si parametrización no es posible (mejor evitar).
+* Principio de menor privilegio en DB: cuentas solo con SELECT/INSERT según necesidad.
+* WAF a modo compensatorio para reglas de bloqueo de payloads comunes.
+
+---
+
+# 5. SAST (Static Application Security Testing)
+
+Objetivo: detectar fallas en código sin ejecución.
+
+Herramientas comunes: Semgrep, SpotBugs (Java), Bandit (Python), SonarQube SAST.
+Integración práctica:
+
+* Reglas custom para patrones propios (por ejemplo: `exec()` con input externo).
+* Configurar severidad y false-positive tuning.
+* Generar SARIF y publicar en PR checks para trazabilidad.
+
+Ejemplo Semgrep rule (evitar `exec` con variable):
+
+```yaml
+rules:
+  - id: python-exec-input
+    patterns:
+      - pattern: exec($X)
+      - pattern-not: exec("literal")
+    message: "Evitar exec con entrada variable"
+    severity: ERROR
+```
+
+---
+
+# 6. IaC (Infrastructure as Code) — riesgos y escaneo
+
+Problemas típicos:
+
+* Exposición de puertos, roles IAM demasiado permisivos, secretos embebidos.
+* Configuración distinta entre entornos (dev vs prod).
+
+Herramientas: tfsec, checkov, terraform-validate + plan scanning.
+Práctica recomendada:
+
+* GitOps: todo IaC en repos, PR obligatorio, políticas OPA/Conftest.
+* Scans automáticos en pipeline y bloqueo de PR si fallan.
+* Secrets en vault (HashiCorp Vault, AWS Secrets Manager) y no en código.
+
+Ejemplo `tfsec` fail:
+
+```
+AWS017: S3 bucket is public -> fix: set acl = "private" and block_public_acls = true
+```
+
+---
+
+# 7. DAST (Dynamic Application Security Testing)
+
+Objetivo: encontrar vulnerabilidades visibles en ejecución (XSS, SQLi, auth issues).
+
+Herramientas: OWASP ZAP, Burp Suite (profesional), Nikto.
+Integración práctica:
+
+* Ejecutar ZAP en staging con autenticación script para el flujo de login, analizar endpoints.
+* Mapear cobertura automática y priorizar findings por impacto.
+* Combinar DAST con fuzzing en endpoints críticos.
+
+Comando ZAP ejemplo (baseline):
+
+```bash
+zap-baseline.py -t https://staging.example.com -r zap-report.html
+```
+
+---
+
+# 8. RASP (Runtime Application Self-Protection)
+
+Definición: agente integrado en la aplicación que detecta y bloquea ataques en runtime (instrumentación en JVM/.NET).
+Uso:
+
+* Protección contra inyección, manipulación de sesión, defensa ante anomalías de runtime.
+* Útil como capa compensatoria cuando no es factible arreglo inmediato.
+
+Limitaciones:
+
+* Puede introducir latencia y falsos positivos; requiere tuning.
+* No sustituye revisión de código ni hardening.
+
+---
+
+# 9. Pruebas de configuración y hardening
+
+Áreas a cubrir:
+
+* Seguridad de la infraestructura: firewalls, cierre de puertos innecesarios, TLS, cabeceras HTTP seguras (CSP, HSTS, X-Frame-Options).
+* Servicios: deshabilitar cuentas por defecto, eliminar plugins/sample data.
+* OS/Host hardening: usar CIS Benchmarks (automatizar con Ansible/CIS scripts).
+* Contenedores: escanear imagenes (Trivy), minimizar imágenes base, read-only filesystem.
+
+Checklist básico:
+
+* TLS>=1.2 configurado; no ciphers débiles.
+* No exponer interfaces de administración en internet.
+* Logs enviados a SIEM con retención definida.
+* Scans regulares (vuln scanning, pentests).
+
+---
+
+# 10. OWASP (A05 y A05: Injection) — contexto y vínculo con lo anterior
+
+OWASP Top 10 identifica categorías críticas: “Security Misconfiguration” (A05 en versiones 2021/2025 RC) y “Injection” (A05 en 2025 RC según ranking). Las prácticas de hardening, IaC scanning y SAST/DAST mitigarán estas categorías. Consultar la documentación oficial para definiciones y mitigaciones recomendadas. ([OWASP][1])
+
+---
+
+# 11. Técnicas de “version” de defensas (gestión y evolución de controles)
+
+Interpretación práctica: versionar y probar las defensas como código. Componentes:
+
+* Security-as-Code: reglas OPA/Conftest, semgrep rules, tfsec policies en repos.
+* Versionado de políticas: PR, code review, CI checks para reglas y exceptions.
+* Canary de políticas: deploy de nuevas reglas en canary para evaluar falsos positivos antes de bloqueo global.
+* Rollback automatizado: instrumentar métricas para revertir reglas causantes de fallo en producción.
+
+Beneficio: trazabilidad, auditoría, revertible, reproducible.
+
+---
+
+# 12. Principios de codificación segura (prácticos)
+
+* Principio de menor privilegio: minimizar privilegios en cuentas, procesos y servicios.
+* Fail-secure: en error, negar acceso por defecto.
+* Saneamiento y validación por allowlist: validar tipo/longitud/format.
+* Criptografía correcta: usar librerías modernas, no reimplementar.
+* Evitar información sensible en logs.
+* Gestión correcta de sesión: tokens de acceso cortos, rotate/refresh, HttpOnly + Secure cookies.
+
+Fragmento de política para sesiones (Express.js):
+
+```js
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  cookie: { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: 3600000 },
+  resave: false,
+  saveUninitialized: false
+}));
+```
+
+---
+
+# 13. Saneamiento, guías defensivas de inyección, gestión de acceso y sesión
+
+Saneamiento:
+
+* Preferir parametrización.
+* Normalize input antes de validaciones posteriores.
+
+Guía defensiva contra inyección:
+
+* Parametrizar consultas.
+* Validar allowlist.
+* Escapar salidas (output encoding) en vistas.
+* Revisar ORM/abstracciones para asegurar que templates no concatenen strings crudos.
+
+Gestión de acceso y sesión:
+
+* Implementar controles RBAC/ABAC según necesidad.
+* Rotación de claves/secretos automática.
+* Short lived tokens + refresh tokens con revocación en backend.
+* MFA para operaciones críticas.
+
+---
+
+# 14. STRIDE y modelado de amenazas
+
+STRIDE = Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege.
+Proceso:
+
+1. Identificar activos y flujos de datos.
+2. Aplicar STRIDE a cada componente.
+3. Priorizar mitigaciones por riesgo/impacto.
+4. Convertir mitigaciones en requisitos de seguridad verificables (tests automáticos).
+
+Ejemplo: flujo de auth → threat: spoofing token → mitigación: signed JWT with short TTL + rotation + jti blacklist.
+
+---
+
+# 15. Auditoría forense, logging y trazabilidad
+
+Requisitos mínimos para forense:
+
+* Logs inmutables (WORM) o transporte seguro a SIEM.
+* Contexto de eventos: userID, IP, user agent, action, resource, timestamp (ISO8601).
+* Trazabilidad de despliegues (artifact hash) y cambios de infraestructura (git commit).
+* Retención acorde a normativas.
+* Playbooks de respuesta con steps reproducibles.
+
+Ejemplo de entrada de log JSON:
+
+```json
+{
+  "ts":"2025-11-26T12:34:56Z",
+  "user":"alice",
+  "action":"login_failed",
+  "ip":"203.0.113.42",
+  "reason":"invalid_password",
+  "session_id":"abc123"
+}
+```
+
+---
+
+# 16. Casos de uso y ejemplos concretos de integración
+
+Caso A — Prevención SQLi en servicio crítico:
+
+* Implementar prepared statements + SAST rule que detecte concatenación en queries.
+* Pipeline: semgrep (PR) + unit tests que incluyan fuzzed inputs → DAST en staging.
+* Producción: RASP para bloquear inyección detectada por patrones anómalos.
+
+Caso B — Hardening IaC en multi-tenant cloud:
+
+* IaC PRs obligatorios, tfsec + Conftest (policies deny public S3, deny wide IAM).
+* GitOps deploy + pipeline que ejecuta Ansible hardening post-deploy.
+* Registro de cambios y snapshot de configuración para auditoría.
+
+---
+
+# 17. Métricas que importan (operacionales, no vanity)
+
+* Tiempo medio para remediar (MTTR) vulnerabilidades críticas.
+* Porcentaje de PRs con findings SAST ≥High antes del merge.
+* Cobertura DAST sobre endpoints críticos.
+* Número de despliegues con políticas nuevas aplicadas vs rollbacks por FP.
+* Logs por incidente y tiempo hasta primer evento detectado.
+
+---
+
+# 18. Resumen de controles prácticos mínimos (lista accionable)
+
+1. Shift-Left: SAST y SCA en PR.
+2. IaC scanning + policy-as-code.
+3. Parametrizar todas las consultas; reglas semgrep para detectar excepciones.
+4. DAST automatizado en staging con autenticación.
+5. Hardening basado en CIS + escaneo de imágenes (Trivy).
+6. RASP/WAF en producción como control compensatorio.
+7. Logging estructurado y SIEM, playbook de response.
+8. Versionado de políticas de seguridad y GitOps para infra.
+9. Pentest anual + bug bounty program para capas críticas.
+10. Formación continua (briefs sobre OWASP Top 10 y reglas semgrep).
+
+---
+
+# Fuentes clave
+
+Documentación y guía técnica de OWASP sobre Security Misconfiguration e Injection. ([OWASP][1])
+
+[1]: https://owasp.org/Top10/A05_2021-Security_Misconfiguration/?utm_source=chatgpt.com "A05 Security Misconfiguration - OWASP Top 10:2025 RC1"
